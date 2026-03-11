@@ -37,13 +37,24 @@ The tone should be conversational, not a form. Build the identity through dialog
 
 After identity exists (or if it already did), walk through these steps. Check each one — skip if already done.
 
-### 1. Data directories
+### 1. pi login
+
+The user needs to authenticate pi for OAuth/LLM access. Without this, recall and llm-pipe won't work.
+
+```bash
+pi
+# Then run /login inside pi and follow the OAuth flow
+```
+
+Check if already authenticated: look for credentials in `~/.pi/agent/settings.json` — if `defaultProvider` is set, they're logged in.
+
+### 2. Data directories
 
 ```bash
 mkdir -p ~/.snorrio/{episodes,cache/{days,weeks,months,quarters,years},logs}
 ```
 
-### 2. Config file
+### 3. Config file
 
 If `~/.config/snorrio/config.json` doesn't exist, create it:
 
@@ -61,9 +72,56 @@ If `~/.config/snorrio/config.json` doesn't exist, create it:
 
 Ask the user if they want to change any defaults (e.g., provider, model preferences, timezone).
 
-### 3. Launchd daemon
+### 4. PATH setup
 
-Find the snorrio package directory (this skill's grandparent: resolve `SKILL.md` → `skills/onboarding/` → package root). Find node (`which node`).
+Check if `~/.local/bin` is on PATH. If not, add to shell profile:
+
+```bash
+mkdir -p ~/.local/bin
+
+# Add to PATH if not already there
+if ! echo "$PATH" | grep -q "$HOME/.local/bin"; then
+  SHELL_RC="$HOME/.zshrc"
+  [ -n "$BASH_VERSION" ] && SHELL_RC="$HOME/.bashrc"
+  echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$SHELL_RC"
+  export PATH="$HOME/.local/bin:$PATH"
+fi
+```
+
+### 5. CLI wrappers
+
+Find the snorrio package directory (this skill's grandparent: resolve `SKILL.md` → `skills/onboarding/` → package root). Use that as `PACKAGE_DIR`.
+
+Both wrappers are simple — `ai.mjs` finds pi dynamically at runtime, no `NODE_PATH` needed.
+
+**recall** — symlink to the recall engine:
+
+```bash
+chmod +x PACKAGE_DIR/src/recall-engine.mjs
+ln -sf PACKAGE_DIR/src/recall-engine.mjs ~/.local/bin/recall
+```
+
+**llm** — wrapper script (needs to find the skill directory at runtime):
+
+```bash
+cat > ~/.local/bin/llm << 'WRAPPER'
+#!/bin/bash
+exec node "PACKAGE_DIR/skills/llm-pipe/llm-pipe.mjs" "$@"
+WRAPPER
+chmod +x ~/.local/bin/llm
+```
+
+Replace `PACKAGE_DIR` with the actual resolved path.
+
+Verify both:
+```bash
+which recall && which llm
+echo "test" | llm "respond with one word"
+```
+
+### 6. Launchd daemon (macOS)
+
+Find node path (`which node`).
 
 Write `~/Library/LaunchAgents/io.snorrio.dmn.plist`:
 
@@ -84,7 +142,7 @@ Write `~/Library/LaunchAgents/io.snorrio.dmn.plist`:
     <key>HOME</key>
     <string>HOME_DIR</string>
     <key>PATH</key>
-    <string>NODE_DIR:/usr/local/bin:/usr/bin:/bin</string>
+    <string>NODE_BIN_DIR:/usr/local/bin:/usr/bin:/bin</string>
     <key>SNORRIO_HOME</key>
     <string>HOME_DIR/.snorrio</string>
   </dict>
@@ -100,7 +158,7 @@ Write `~/Library/LaunchAgents/io.snorrio.dmn.plist`:
 </plist>
 ```
 
-Replace `NODE_PATH`, `NODE_DIR` (dirname of node binary), `PACKAGE_DIR`, and `HOME_DIR` with actual values.
+Replace `NODE_PATH` (full path to node binary), `NODE_BIN_DIR` (dirname of node), `PACKAGE_DIR`, and `HOME_DIR` with actual values.
 
 Then load it:
 
@@ -109,48 +167,28 @@ launchctl bootout gui/$(id -u)/io.snorrio.dmn 2>/dev/null || true
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.snorrio.dmn.plist
 ```
 
-Verify it's running: `launchctl list io.snorrio.dmn` — exit status 0 and PID present means success.
+Verify: `launchctl list io.snorrio.dmn` — exit status 0 and PID present means success.
 
-### 4. Recall CLI
+### 7. Passwordless sudo (optional)
 
-Make the recall engine executable and symlink it to `~/.local/bin/` (user-local, no sudo needed):
-
-```bash
-chmod +x PACKAGE_DIR/src/recall-engine.mjs
-mkdir -p ~/.local/bin
-ln -sf PACKAGE_DIR/src/recall-engine.mjs ~/.local/bin/recall
-```
-
-If `~/.local/bin` is not on PATH, add it to `~/.zshrc`:
-
-```bash
-export PATH="$HOME/.local/bin:$PATH"
-```
-
-Verify: `which recall` (may need `source ~/.zshrc` or a new shell first).
-
-### 5. Passwordless sudo (optional)
-
-Ask the user if they want passwordless sudo. Explain: this lets the agent run privileged commands (e.g., system config, network tools) without interrupting you for a password. It's not required for snorrio itself, but useful for a full-autonomy agent setup.
+Ask the user if they want passwordless sudo. Explain: this lets the agent run privileged commands without interrupting you for a password. It's not required for snorrio itself, but useful for full agent autonomy.
 
 If they want it:
 
 ```bash
-# Create a sudoers drop-in file (safer than editing /etc/sudoers directly)
 sudo bash -c 'echo "USERNAME ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/USERNAME && chmod 0440 /etc/sudoers.d/USERNAME'
 ```
 
 Replace `USERNAME` with the output of `whoami`. The user will need to enter their password this one time.
 
-Verify: `sudo -n true && echo "passwordless sudo works"`.
+If they decline, note in APPEND_SYSTEM.md that sudo requires a password.
 
-If they decline, note in APPEND_SYSTEM.md that sudo requires a password so future sessions know to ask before running privileged commands.
-
-### 6. Verify
+### 8. Verify
 
 Run a quick smoke test:
 - `launchctl list io.snorrio.dmn` — daemon running
 - `recall` — CLI accessible
+- `echo "test" | llm "one word"` — llm-pipe works
 - `ls ~/.snorrio/` — directories exist
 - `cat ~/.config/snorrio/config.json` — config present
 - `cat ~/.pi/agent/APPEND_SYSTEM.md` — identity exists
