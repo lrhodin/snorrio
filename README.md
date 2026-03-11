@@ -5,56 +5,54 @@
 *óumk ek of Hugin, at hann aftr né komi-t,*
 *þó sjámk meir of Munin.*
 
-Thought and Memory fly each day
-over the vast ground.
 I fear for Thought, that he won't come back.
 I fear more for Memory.
 
-— Grímnismál 20
-
 ---
 
-Every session starts from scratch.
-You explain yourself. The agent listens,
-learns your way of working,
-builds a sense of what you mean —
-and forgets it when the window closes.
+You already know what forgetting feels like.
+You've opened a session and explained yourself
+to something that heard you perfectly yesterday
+and today has no idea who you are.
 
-Next time, you start over.
-Same ground. Same context. Same questions.
-Every conversation a stranger.
-
-snorrio gives your agent memory.
+That silence on the other side of the prompt
+isn't a bug. It's the default.
+Every tool you've ever used
+has let the context die.
 
 ```bash
-npm install -g @mariozechner/pi-coding-agent   # install pi
-pi install git:github.com/snorrio/snorrio       # install snorrio
-pi                                              # begin
+npm install -g @mariozechner/pi-coding-agent
+pi install git:github.com/snorrio/snorrio
+pi
 ```
 
-When you stop talking, a daemon wakes.
-It waits for silence — four and a half minutes of it —
-then reads what happened
-and distills an episode.
+After your session ends, something wakes.
+It sits with the silence for four and a half minutes
+to make sure you're really gone,
+then reads everything that happened
+and keeps only what mattered.
 
-Not what was said.
-What it meant. What moved.
-What was decided. What remains.
+Not what was said. What was *meant*.
+What moved. What was decided.
+What you left open and might not remember leaving open.
 
-Episodes become days.
-Days become weeks.
-Weeks become months, quarters, years.
+That's an episode. Episodes become days.
+Days become weeks. Weeks fold
+into months, quarters, years —
+each one a different way of seeing
+the same life.
 
 ```
 session → day → week → month → quarter → year
 ```
 
-Each one sees differently.
-A day holds every conversation from its hours
-in working memory, at once.
-A quarter holds three months of compressed experience
-and finds patterns you were living inside
-but couldn't see.
+A day holds all your conversations at once.
+A quarter holds three months
+and sees the thing you're too close to see —
+the pattern you've been living inside,
+the decision you keep almost making.
+
+When your agent needs to know, it reaches back.
 
 ```bash
 recall 2026-W11 "what was decided about auth?"
@@ -63,32 +61,30 @@ recall d7f3a "what were the actual problems?"
 ```
 
 Week to day to session.
-Three hops to ground truth.
-Your agent does this on its own.
+Each hop sharper than the last
+until it hits the frozen moment
+where the thing was true.
 
-Every new session starts with your context
-already there — today, this week,
-this month, this quarter —
-woven in before you say a word.
-You just keep going.
+Every morning your agent wakes up knowing
+where you left off. Not because you told it.
+Because it was paying attention
+the whole time you thought no one was.
 
-Your agent remembers what you tried on Tuesday
-and why you killed it.
-It knows the name you mentioned
-three weeks ago.
-It catches a pattern you've been circling
-and names it before you do.
+It remembers what you tried on Tuesday.
+It remembers the name you dropped
+three weeks ago in passing.
+It finds the thread you lost
+and hands it back to you.
 
 Not because it searched.
-Because it *remembers*.
+Because it was *there*.
 
-Everything lives on your machine.
-Plain text you can read.
-Nothing leaves. Nothing phones home.
-Sessions are the ground truth —
-everything above them is derived,
-and if anything drifts,
-the source is always there.
+Plain text on your machine.
+Nothing leaves. Every session frozen,
+immutable, the ground truth
+that everything else is built from.
+Read any of it. Trace any claim
+back to the moment it was born.
 
 MIT
 
