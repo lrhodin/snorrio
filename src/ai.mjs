@@ -33,7 +33,7 @@ function findPiRoot() {
 
 const PI_ROOT = findPiRoot();
 const PI_AI = join(PI_ROOT, "node_modules/@mariozechner/pi-ai/dist/index.js");
-const PI_OAUTH = join(PI_ROOT, "node_modules/@mariozechner/pi-ai/oauth.js");
+const PI_OAUTH = join(PI_ROOT, "node_modules/@mariozechner/pi-ai/dist/oauth.js");
 const PI_AGENT = join(PI_ROOT, "dist/index.js");
 
 // Dynamic imports (ESM)
