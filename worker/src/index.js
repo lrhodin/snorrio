@@ -1,7 +1,7 @@
 // snorr.io redirect worker
 // /install → raw install script on GitHub
 
-const INSTALL_URL = "https://raw.githubusercontent.com/snorrio/snorrio/main/install.sh";
+const INSTALL_URL = "https://raw.githubusercontent.com/lrhodin/snorrio/main/install.sh";
 
 export default {
   async fetch(request) {
@@ -13,7 +13,7 @@ export default {
 
     // Root → GitHub repo
     if (url.pathname === "/" || url.pathname === "") {
-      return Response.redirect("https://github.com/snorrio/snorrio", 302);
+      return Response.redirect("https://github.com/lrhodin/snorrio", 302);
     }
 
     return new Response("Not found", { status: 404 });
