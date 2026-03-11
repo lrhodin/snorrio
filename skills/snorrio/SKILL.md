@@ -83,9 +83,9 @@ skills/
   recall/      # Recall tool (extension)
   llm-pipe/    # LLM shell primitive
 src/
-  ai.mjs             # Shared pi AI interface (model resolution, auth, streaming)
-  episode-daemon.mjs  # FSEvents watcher + episode generation
-  recall-engine.mjs   # Temporal recall across all levels
+  ai.ts             # Shared pi AI interface (model resolution, auth, streaming)
+  episode-daemon.ts  # FSEvents watcher + episode generation
+  recall-engine.ts   # Temporal recall across all levels
 ```
 
 ## Onboarding
@@ -182,13 +182,13 @@ fi
 
 Find the snorrio package directory (this skill's grandparent: resolve `SKILL.md` → `skills/snorrio/` → package root). Use that as `PACKAGE_DIR`.
 
-Both wrappers are simple — `ai.mjs` finds pi dynamically at runtime, no `NODE_PATH` needed.
+Both wrappers are simple — `ai.ts` finds pi dynamically at runtime, no `NODE_PATH` needed.
 
 **recall** — symlink to the recall engine:
 
 ```bash
-chmod +x PACKAGE_DIR/src/recall-engine.mjs
-ln -sf PACKAGE_DIR/src/recall-engine.mjs ~/.local/bin/recall
+chmod +x PACKAGE_DIR/src/recall-engine.ts
+ln -sf PACKAGE_DIR/src/recall-engine.ts ~/.local/bin/recall
 ```
 
 **llm** — wrapper script:
@@ -196,7 +196,7 @@ ln -sf PACKAGE_DIR/src/recall-engine.mjs ~/.local/bin/recall
 ```bash
 cat > ~/.local/bin/llm << 'WRAPPER'
 #!/bin/bash
-exec node "PACKAGE_DIR/skills/llm-pipe/llm-pipe.mjs" "$@"
+exec node "PACKAGE_DIR/skills/llm-pipe/llm-pipe.ts" "$@"
 WRAPPER
 chmod +x ~/.local/bin/llm
 ```
@@ -225,7 +225,7 @@ Write `~/Library/LaunchAgents/io.snorrio.dmn.plist`:
   <key>ProgramArguments</key>
   <array>
     <string>NODE_PATH</string>
-    <string>PACKAGE_DIR/src/episode-daemon.mjs</string>
+    <string>PACKAGE_DIR/src/episode-daemon.ts</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>

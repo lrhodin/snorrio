@@ -10,7 +10,7 @@ export default function (pi: ExtensionAPI) {
   let _engine: any;
   async function getEngine() {
     if (!_engine) {
-      const path = new URL("../src/recall-engine.mjs", import.meta.url).pathname;
+      const path = new URL("../src/recall-engine.ts", import.meta.url).pathname;
       _engine = await import(path);
     }
     return _engine;

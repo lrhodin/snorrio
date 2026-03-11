@@ -8,7 +8,7 @@
 //   4. Pi's current model from settings
 //
 // Usage:
-//   import { resolveModel, complete } from "./ai.mjs";
+//   import { resolveModel, complete } from "./ai.ts";
 //   const model = await resolveModel(cliArg, "dmn");
 //   const result = await complete(model, messages, systemPrompt);
 
@@ -16,6 +16,44 @@ import { readFileSync, writeFileSync, mkdirSync } from "fs";
 import { join, dirname } from "path";
 import { execSync } from "child_process";
 import { realpathSync } from "fs";
+
+// --- Types ---
+
+interface SnorrioConfig {
+  provider?: string | null;
+  model?: string;
+  timezone?: string | null;
+  providerPreference?: string[];
+  tools?: Record<string, { model?: string; provider?: string }>;
+}
+
+interface PiSettings {
+  defaultProvider?: string;
+  defaultModel?: string;
+}
+
+interface Model {
+  provider: string;
+  id: string;
+  [key: string]: any;
+}
+
+export interface Resolved {
+  model: Model;
+  apiKey: string;
+}
+
+interface Message {
+  role: string;
+  content: string | any[];
+  timestamp?: number;
+}
+
+interface CompletionResult {
+  stopReason?: string;
+  errorMessage?: string;
+  content?: Array<{ type: string; text?: string }>;
+}
 
 // --- Pi package discovery ---
 
@@ -91,7 +129,7 @@ function getProviderPreference() {
   return config.providerPreference || DEFAULT_PROVIDER_PREFERENCE;
 }
 
-function loadConfig() {
+function loadConfig(): SnorrioConfig {
   try {
     return JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
   } catch {
@@ -99,7 +137,7 @@ function loadConfig() {
   }
 }
 
-function loadPiSettings() {
+function loadPiSettings(): PiSettings {
   try {
     return JSON.parse(readFileSync(PI_SETTINGS_PATH, "utf8"));
   } catch {
@@ -144,7 +182,7 @@ async function applyProviderModifications(model) {
   return modified;
 }
 
-export async function resolveModel(spec = null, toolName = null) {
+export async function resolveModel(spec: string | null = null, toolName: string | null = null): Promise<Resolved> {
   const config = loadConfig();
   const piAi = await getPiAi();
 
@@ -227,7 +265,7 @@ async function resolveAlias(alias, preferredProvider, piAi) {
 
 // --- LLM Calls ---
 
-export async function complete(resolved, messages, systemPrompt, options = {}) {
+export async function complete(resolved: Resolved, messages: Message[], systemPrompt: string, options: Record<string, any> = {}): Promise<CompletionResult> {
   const piAi = await getPiAi();
   return piAi.completeSimple(
     resolved.model,
@@ -236,7 +274,7 @@ export async function complete(resolved, messages, systemPrompt, options = {}) {
   );
 }
 
-export function stream(resolved, messages, systemPrompt, options = {}) {
+export function stream(resolved: Resolved, messages: Message[], systemPrompt: string, options: Record<string, any> = {}): AsyncIterable<any> {
   if (!_piAi) throw new Error("Call resolveModel() before stream()");
   return _piAi.streamSimple(
     resolved.model,
@@ -245,7 +283,7 @@ export function stream(resolved, messages, systemPrompt, options = {}) {
   );
 }
 
-export async function completeWithTools(resolved, messages, systemPrompt, tools, options = {}) {
+export async function completeWithTools(resolved: Resolved, messages: Message[], systemPrompt: string, tools: any[], options: Record<string, any> = {}): Promise<CompletionResult> {
   const piAi = await getPiAi();
   return piAi.completeSimple(
     resolved.model,
@@ -256,7 +294,7 @@ export async function completeWithTools(resolved, messages, systemPrompt, tools,
 
 // --- Config Management ---
 
-export function ensureConfig() {
+export function ensureConfig(): void {
   try {
     readFileSync(CONFIG_PATH);
   } catch {
@@ -273,14 +311,14 @@ export function ensureConfig() {
 
 // --- Timezone ---
 
-export function getTimezone() {
+export function getTimezone(): string {
   const config = loadConfig();
   return config.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 }
 
 // --- Utilities ---
 
-export function getText(message) {
+export function getText(message: CompletionResult | null): string {
   if (!message?.content) return "";
   return message.content
     .filter(c => c.type === "text")
@@ -288,6 +326,6 @@ export function getText(message) {
     .join("");
 }
 
-export function userMessage(content) {
+export function userMessage(content: string): Message {
   return { role: "user", content, timestamp: Date.now() };
 }

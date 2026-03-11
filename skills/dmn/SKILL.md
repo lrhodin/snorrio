@@ -27,15 +27,15 @@ cat ~/.snorrio/logs/$(date +%Y-%m-%d).log | tail -20
 ### Manual operations
 ```bash
 # One-shot sweep — generate episodes for any sessions missing them
-node <package-path>/src/episode-daemon.mjs --sweep
+node <package-path>/src/episode-daemon.ts --sweep
 
 # Reprocess a time range (regenerate episodes + caches)
-node <package-path>/src/episode-daemon.mjs --reprocess 2026-W10
-node <package-path>/src/episode-daemon.mjs --reprocess 2026-03-05
-node <package-path>/src/episode-daemon.mjs --reprocess 2026-Q1
+node <package-path>/src/episode-daemon.ts --reprocess 2026-W10
+node <package-path>/src/episode-daemon.ts --reprocess 2026-03-05
+node <package-path>/src/episode-daemon.ts --reprocess 2026-Q1
 
 # Reprocess from a specific depth (skip episode regeneration)
-node <package-path>/src/episode-daemon.mjs --reprocess 2026-W10 day
+node <package-path>/src/episode-daemon.ts --reprocess 2026-W10 day
 ```
 
 ### Flush (process pending sessions now)

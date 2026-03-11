@@ -4,7 +4,7 @@
 // Model can be an alias (haiku, sonnet, opus), full spec (github-copilot/claude-haiku-4.5),
 // or omitted to use the per-tool default from ~/.config/snorri/config.json.
 
-import { resolveModel, stream, userMessage } from "../../src/ai.mjs";
+import { resolveModel, stream, userMessage } from "../../src/ai.ts";
 
 // --- Stdin ---
 

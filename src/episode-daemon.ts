@@ -20,9 +20,9 @@
 //   $SNORRIO_HOME/cache/{days,weeks,months,quarters}/
 //
 // Usage:
-//   node episode-daemon.mjs            — live daemon
-//   node episode-daemon.mjs --sweep    — one-shot: generate missing episodes
-//   node episode-daemon.mjs --reprocess — one-shot: regenerate ALL episodes
+//   node episode-daemon.ts            — live daemon
+//   node episode-daemon.ts --sweep    — one-shot: generate missing episodes
+//   node episode-daemon.ts --reprocess — one-shot: regenerate ALL episodes
 
 import { watch } from "fs";
 import {
@@ -30,8 +30,8 @@ import {
   readdirSync, unlinkSync, renameSync, appendFileSync,
 } from "fs";
 import { join, basename } from "path";
-import { resolveModel, complete, getText, userMessage, SNORRIO_HOME, piRoot, getTimezone } from "./ai.mjs";
-import { recall } from "./recall-engine.mjs";
+import { resolveModel, complete, getText, userMessage, SNORRIO_HOME, piRoot, getTimezone } from "./ai.ts";
+import { recall } from "./recall-engine.ts";
 
 const PI_ROOT = piRoot();
 const { loadEntriesFromFile, buildSessionContext } = await import(

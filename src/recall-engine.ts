@@ -17,7 +17,7 @@
 
 import { readFileSync, readdirSync, statSync, existsSync, writeFileSync, mkdirSync } from "fs";
 import { join } from "path";
-import { resolveModel, complete, getText, userMessage, SNORRIO_HOME, piRoot } from "./ai.mjs";
+import { resolveModel, complete, getText, userMessage, SNORRIO_HOME, piRoot } from "./ai.ts";
 
 const PI_ROOT = piRoot();
 const { loadEntriesFromFile, buildSessionContext } = await import(join(PI_ROOT, "dist/core/session-manager.js"));
