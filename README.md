@@ -12,6 +12,7 @@ Your agent has never met you.
 
 ```bash
 curl -fsSL https://snorr.io/install | bash
+pi
 ```
 
 <br>
