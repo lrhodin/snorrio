@@ -66,7 +66,7 @@ The quarter can.
 
 Your agent drills down with `recall`.
 Week to day. Day to session.
-Map to region to ground truth.
+Map, then region, then ground truth.
 
 ```bash
 recall 2026-W11 "what was decided about auth?"
