@@ -11,9 +11,7 @@ Your agent has never met you.
 <br>
 
 ```bash
-npm install -g @mariozechner/pi-coding-agent
-pi install git:github.com/snorrio/snorrio
-pi
+curl -fsSL https://snorr.io/install | bash
 ```
 
 <br>
@@ -39,29 +37,16 @@ Each a different altitude over the same life.
 <br>
 <br>
 <br>
-<br>
-
-```
-recall 2026-W11  "what was done to me"
-recall 2026-03-06 "when did I stop listening"
-recall d7f3a     "look in the mirror"
-```
-
-<br>
-<br>
-
-Week to day to session.  
-Until it finds the frozen moment where something was true.
-
-<br>
-<br>
-<br>
-<br>
-<br>
-<br>
 
 Plain text. Your machine. Nothing leaves.
 
+<br>
+<br>
+
+The rest reveals itself through use.  
+Your agent can explain the architecture — the source is open.
+
+<br>
 <br>
 <br>
 <br>
