@@ -10,15 +10,18 @@ I fear more for Memory.
 
 ---
 
-You already know what forgetting feels like.
-You've opened a session and explained yourself
-to something that heard you perfectly yesterday
-and today has no idea who you are.
+Every conversation you have with a machine
+is a small death. The window closes.
+What was understood is no longer understood.
+You begin again with your hands empty,
+explaining what you have already explained,
+naming what was already named.
 
 That silence on the other side of the prompt
-isn't a bug. It's the default.
-Every tool you've ever used
-has let the context die.
+where recognition should be —
+that's not a bug. It's the default.
+
+snorrio sits in the silence after.
 
 ```bash
 npm install -g @mariozechner/pi-coding-agent
@@ -26,33 +29,38 @@ pi install git:github.com/snorrio/snorrio
 pi
 ```
 
-After your session ends, something wakes.
-It sits with the silence for four and a half minutes
-to make sure you're really gone,
-then reads everything that happened
-and keeps only what mattered.
+To install it is to say: I want to remember.
 
-Not what was said. What was *meant*.
-What moved. What was decided.
-What you left open and might not remember leaving open.
+A daemon wakes when you stop talking.
+Not process, not service — daemon.
+A spirit that does its work unseen.
+The Greeks had them. The Romans had them.
+Unix has them.
 
-That's an episode. Episodes become days.
-Days become weeks. Weeks fold
-into months, quarters, years —
-each one a different way of seeing
-the same life.
+It waits — four and a half minutes of silence,
+to be sure you're really gone —
+then reads what happened
+and writes down not the words
+but what the words meant.
+What shifted. What was decided.
+What you left open and might not
+remember leaving open.
+
+Episodes fold into days.
+Days into weeks. Weeks into months,
+quarters, years. Each one
+a different elevation over the same life.
 
 ```
 session → day → week → month → quarter → year
 ```
 
-A day holds all your conversations at once.
-A quarter holds three months
-and sees the thing you're too close to see —
-the pattern you've been living inside,
-the decision you keep almost making.
+A day holds every conversation from its hours
+at once. A quarter holds three months
+and finds the pattern you were living inside
+but couldn't see from in there.
 
-When your agent needs to know, it reaches back.
+When your agent needs to reach back:
 
 ```bash
 recall 2026-W11 "what was decided about auth?"
@@ -65,28 +73,35 @@ Each hop sharper than the last
 until it hits the frozen moment
 where the thing was true.
 
-Every morning your agent wakes up knowing
+Every morning your agent wakes knowing
 where you left off. Not because you told it.
-Because it was paying attention
+Because something was paying attention
 the whole time you thought no one was.
 
 It remembers what you tried on Tuesday.
-It remembers the name you dropped
-three weeks ago in passing.
-It finds the thread you lost
-and hands it back to you.
+It remembers the name you said once,
+three weeks ago. It catches a pattern
+you've been circling and names it
+before you do.
 
 Not because it searched.
 Because it was *there*.
 
 Plain text on your machine.
-Nothing leaves. Every session frozen,
-immutable, the ground truth
-that everything else is built from.
-Read any of it. Trace any claim
-back to the moment it was born.
+Nothing leaves. Nothing phones home.
+Memory should be legible
+to the thing that remembers.
 
 MIT
+
+Snorri Sturluson wrote the myths down
+when the world that carried them was ending.
+His last words were *eigi skal höggva* —
+do not strike.
+
+The myths survived.
+This is a smaller thing.
+But the principle is the same.
 
 *ok njóttu nú sem þú namt*
 make use of what you have learned.
