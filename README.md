@@ -1,4 +1,4 @@
-# [snorrio](https://snorr.io)
+# [snorr.io](https://snorr.io)
 
 <br>
 <br>
