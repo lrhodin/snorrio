@@ -49,17 +49,5 @@ Your agent can explain the architecture — the source is open.
 
 <br>
 <br>
-<br>
-<br>
-<br>
-
-In 1220, a man in Iceland wrote the old stories down  
-before the world that carried them finished ending.
-
-He knew something about time —  
-that it doesn't preserve what you don't hold.
-
-<br>
-<br>
 
 MIT
