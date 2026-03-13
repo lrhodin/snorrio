@@ -1,8 +1,0 @@
-name = "snorrio-redirect"
-main = "src/index.ts"
-compatibility_date = "2024-01-01"
-account_id = "481e18142a8bf462d9843f795f348edf"
-
-routes = [
-  { pattern = "snorr.io", custom_domain = true }
-]

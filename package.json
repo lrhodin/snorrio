@@ -4,10 +4,6 @@
   "description": "Persistent memory system for pi — episodes, recall, and context injection.",
   "keywords": ["pi-package"],
   "type": "module",
-  "bin": {
-    "recall": "./src/recall-engine.mjs",
-    "snorrio-daemon": "./src/episode-daemon.mjs"
-  },
   "pi": {
     "extensions": ["./extensions"],
     "skills": ["./skills"]

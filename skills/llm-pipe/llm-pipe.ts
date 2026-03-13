@@ -2,7 +2,7 @@
 // llm-pipe: Fast LLM pipe using Snorri AI module
 // Usage: cmd | llm-pipe "prompt" [model]
 // Model can be an alias (haiku, sonnet, opus), full spec (github-copilot/claude-haiku-4.5),
-// or omitted to use the per-tool default from ~/.config/snorri/config.json.
+// or omitted to use the per-tool default from ~/.config/snorrio/config.json.
 
 import { resolveModel, stream, userMessage } from "../../src/ai.ts";
 

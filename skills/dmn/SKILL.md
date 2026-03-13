@@ -1,3 +1,6 @@
+---
+description: Manage the episode generation daemon — watch sessions, generate summaries, maintain temporal caches.
+---
 # Episode Daemon (DMN)
 
 Manages the episode generation daemon — watches pi sessions, generates episode summaries, maintains temporal caches.

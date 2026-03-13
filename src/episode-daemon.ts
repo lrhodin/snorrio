@@ -30,6 +30,7 @@ import {
   readdirSync, unlinkSync, renameSync, appendFileSync,
 } from "fs";
 import { join, basename } from "path";
+import { hostname as osHostname } from "os";
 import { resolveModel, complete, getText, userMessage, SNORRIO_HOME, piRoot, getTimezone } from "./ai.ts";
 import { recall } from "./recall-engine.ts";
 
@@ -45,6 +46,20 @@ const CACHE_DIR = join(SNORRIO_HOME, "cache");
 
 const DEBOUNCE_MS = 270_000; // 4 minutes 30 seconds
 const TZ = getTimezone();
+
+function getMachine() {
+  try {
+    const cfg = JSON.parse(readFileSync(join(HOME, ".config/snorrio/config.json"), "utf8"));
+    if (cfg.machine) return cfg.machine;
+  } catch {}
+  return osHostname().replace(/\.local$/, "").toLowerCase();
+}
+const MACHINE = getMachine();
+
+function buildFrontmatter(origin, sourcePath, timestamp) {
+  const source = sourcePath.startsWith(HOME) ? "~" + sourcePath.slice(HOME.length) : sourcePath;
+  return `---\norigin: ${origin}\nmachine: ${MACHINE}\nsource: ${source}\ntimestamp: ${timestamp}\n---\n\n`;
+}
 
 const timers = new Map();
 const inflight = new Set();
@@ -145,20 +160,18 @@ async function generateEpisode(filePath) {
   const text = getText(result);
   if (!text) { log(`  Empty output: ${id.slice(0, 8)}`); return null; }
 
+  const fm = buildFrontmatter("pi", filePath, end || start || new Date().toISOString());
   const dir = join(EPISODES_DIR, dateStr);
   mkdirSync(dir, { recursive: true });
   const epPath = join(dir, `${id}.md`);
   const tmp = epPath + ".tmp";
-  writeFileSync(tmp, text, "utf8");
+  writeFileSync(tmp, fm + text, "utf8");
   renameSync(tmp, epPath);
-
-  const weekStr = dateToWeek(dateStr);
-  const monthStr = dateStr.slice(0, 7);
 
   log(`  Done: ${id.slice(0, 8)} → ${text.length} chars`);
 
   if (!globalThis._skipCascade) {
-    await regenerateCaches(dateStr, weekStr, monthStr);
+    await cascadeForDate(dateStr);
   }
 
   return { id, dateStr, path: epPath };
@@ -201,7 +214,10 @@ const CACHE_Q_WEEK = "Write a narrative of this week so far — an essay, not a 
 const CACHE_Q_MONTH = "Write a narrative of this month so far — an essay, not a checklist. What shifted, what themes emerged or faded, what's shaping the direction? Don't restate weekly details — just what's visible at the monthly level. You're the continuity layer across week boundaries — any active threads a new week needs to carry forward should be here, with enough context to find the right week. Reference specific weeks so the reader can navigate down.";
 const CACHE_Q_QUARTER = "Write a narrative of this quarter so far — an essay, not a checklist. What's the arc, what materialized that wasn't there at the start, what's building? Don't restate monthly details — just what's visible from this altitude. You're the continuity layer across month boundaries — any arcs a new month needs to carry forward should be here, with enough context to find the right month. Reference specific months so the reader can navigate down.";
 
-async function regenerateCaches(dateStr, weekStr, monthStr) {
+async function cascadeForDate(dateStr) {
+  const weekStr = dateToWeek(dateStr);
+  const monthStr = dateStr.slice(0, 7);
+
   try {
     log(`  Regenerating day cache: ${dateStr}`);
     const daySummary = await recall(dateStr, CACHE_Q_DAY, "opus");
@@ -219,7 +235,7 @@ async function regenerateCaches(dateStr, weekStr, monthStr) {
   } catch (err) { log(`  Week cache error: ${err.message?.slice(0, 100)}`); }
 
   if (lastProcessedDate && lastProcessedDate !== dateStr) {
-    log(`  Day locked: ${lastProcessedDate} → regenerating month cache: ${monthStr}`);
+    log(`  Day boundary → regenerating month cache: ${monthStr}`);
     try {
       const monthSummary = await recall(monthStr, CACHE_Q_MONTH, "opus");
       if (monthSummary && !monthSummary.startsWith("[recall:")) {
@@ -230,7 +246,7 @@ async function regenerateCaches(dateStr, weekStr, monthStr) {
 
   if (lastProcessedWeek && lastProcessedWeek !== weekStr) {
     const quarterStr = monthToQuarter(monthStr);
-    log(`  Week locked: ${lastProcessedWeek} → regenerating quarter cache: ${quarterStr}`);
+    log(`  Week boundary → regenerating quarter cache: ${quarterStr}`);
     try {
       const quarterSummary = await recall(quarterStr, CACHE_Q_QUARTER, "opus");
       if (quarterSummary && !quarterSummary.startsWith("[recall:")) {
@@ -509,11 +525,12 @@ async function reprocess(rangeStr, depthStr) {
           log(`    ${id.slice(0, 8)} ✗ empty response (stopReason: ${result.stopReason})`);
           fail++; return;
         }
+        const fm = buildFrontmatter("pi", f, end || start || new Date().toISOString());
         const dir = join(EPISODES_DIR, dateStr);
         mkdirSync(dir, { recursive: true });
         const epPath = join(dir, `${id}.md`);
         const tmp = epPath + ".tmp";
-        writeFileSync(tmp, text, "utf8");
+        writeFileSync(tmp, fm + text, "utf8");
         renameSync(tmp, epPath);
         log(`    ${id.slice(0, 8)} ✓ ${text.length} chars`);
         ok++;
@@ -638,10 +655,57 @@ function scheduleSweep() {
 }
 
 // ============================================================================
+// FRONTMATTER MIGRATION
+// ============================================================================
+
+async function addFrontmatter() {
+  log("Building session index...");
+  const sessionIndex = new Map();
+  const files = allSessions();
+  for (const f of files) {
+    const entries = parseSession(f);
+    const id = sessionId(entries);
+    if (!id) continue;
+    const { start, end } = sessionTimestamps(entries);
+    sessionIndex.set(id, { path: f, start, end });
+  }
+  log(`  ${sessionIndex.size} sessions indexed`);
+
+  let updated = 0, skipped = 0, notFound = 0;
+  const episodeDirs = readdirSync(EPISODES_DIR).filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort();
+
+  for (const dateDir of episodeDirs) {
+    const dir = join(EPISODES_DIR, dateDir);
+    const episodes = readdirSync(dir).filter(f => f.endsWith(".md"));
+
+    for (const epFile of episodes) {
+      const epPath = join(dir, epFile);
+      const content = readFileSync(epPath, "utf8");
+
+      if (content.startsWith("---\n")) { skipped++; continue; }
+
+      const sessionUuid = epFile.replace(".md", "");
+      const session = sessionIndex.get(sessionUuid);
+
+      const sourcePath = session?.path || "unknown";
+      const ts = session ? (session.end || session.start || `${dateDir}T00:00:00Z`) : `${dateDir}T00:00:00Z`;
+      if (!session) notFound++;
+
+      const fm = buildFrontmatter("pi", sourcePath, ts);
+      atomicWrite(epPath, fm + content);
+      updated++;
+    }
+  }
+
+  log(`Frontmatter migration: ${updated} updated, ${skipped} already had, ${notFound} session not found`);
+}
+
+// ============================================================================
 // MAIN
 // ============================================================================
 
 async function main() {
+  if (process.argv.includes("--add-frontmatter")) { await addFrontmatter(); process.exit(0); }
   if (process.argv.includes("--sweep")) { await sweep(); process.exit(0); }
   const rpIdx = process.argv.indexOf("--reprocess");
   if (rpIdx !== -1) {

@@ -1,3 +1,6 @@
+---
+description: Query past sessions and temporal summaries by reviving them with full context.
+---
 # Recall
 
 Query past sessions and temporal summaries. Recall revives past context and answers questions from first-person experience.
