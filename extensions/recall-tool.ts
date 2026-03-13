@@ -55,7 +55,7 @@ export default function (pi: ExtensionAPI) {
         const engine = await getEngine();
         const answer = await engine.recall(target, question);
         return {
-          content: [{ type: "text" as const, text: answer }],
+          content: [{ type: "text" as const, text: `[recall: ${target} — "${question}"]\n\n${answer}` }],
           details: {
             target,
             questionLength: question.length,
@@ -67,7 +67,7 @@ export default function (pi: ExtensionAPI) {
           content: [
             {
               type: "text" as const,
-              text: `Recall failed: ${err.message?.slice(0, 300)}`,
+              text: `[recall: ${target} — "${question}"]\n\nRecall failed: ${err.message?.slice(0, 300)}`,
             },
           ],
           details: { error: "failed", target },
