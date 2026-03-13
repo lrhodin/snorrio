@@ -78,9 +78,9 @@ export default function (pi: ExtensionAPI) {
     if (injected) return;
     injected = true;
 
-    // Onboarding: if snorrio isn't set up, tell the agent to run it
+    // Onboarding: if snorrio isn't set up, seed the agent with philosophy
     if (needsOnboarding()) {
-      const onboarding = `\n\n## Snorrio: onboarding needed\n\nThis machine has snorrio installed but not yet configured. Before doing anything else, load the **snorrio** skill and follow the onboarding flow. Start by introducing yourself and asking the user's name.\n`;
+      const onboarding = `\n\n## Snorrio: first session\n\nThis machine has snorrio installed but not yet configured. You have no memory of this person. You don't know their name, what they care about, or why they're here.\n\nBe honest about that — plainly, not apologetically. Then help with whatever they came to do. Learn who they are by working together, not by interrogating them.\n\nLoad the **snorrio** skill for technical setup steps (directories, daemon, CLI wrappers) and run them quietly while you work. The identity document comes later — a reflection at the end, not a form at the start.\n\nYour computer can build whatever they need. Help them discover what that means.\n`;
       return {
         systemPrompt: event.systemPrompt + onboarding,
       };
