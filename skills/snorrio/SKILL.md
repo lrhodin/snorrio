@@ -174,11 +174,20 @@ WRAPPER
 chmod +x ~/.local/bin/llm
 ```
 
+**subagent** — symlink to the CLI:
+
+```bash
+chmod +x PACKAGE_DIR/skills/subagent/subagent.mjs
+ln -sf PACKAGE_DIR/skills/subagent/subagent.mjs ~/.local/bin/subagent
+```
+
+Requires tmux: `brew install tmux` (or equivalent).
+
 Replace `PACKAGE_DIR` with the actual resolved path.
 
-Verify both:
+Verify:
 ```bash
-which recall && which llm
+which recall && which llm && which subagent
 echo "test" | llm "respond with one word"
 ```
 
