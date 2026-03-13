@@ -263,7 +263,7 @@ Verify: `launchctl list io.snorrio.dmn` — exit status 0 and PID present means 
 
 Ask the user if they want passwordless sudo. Explain: this lets the agent run privileged commands without interrupting you for a password. It's not required for snorrio itself, but useful for full agent autonomy.
 
-If they want it:
+**Important**: pi runs non-interactively with no TTY, so `sudo` will fail whenever it requires a password. Since passwordless sudo isn't set up yet at this point, do NOT attempt to run the command yourself. Instead, ask the user to run it in their own terminal:
 
 ```bash
 sudo bash -c 'echo "USERNAME ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/USERNAME && chmod 0440 /etc/sudoers.d/USERNAME'
