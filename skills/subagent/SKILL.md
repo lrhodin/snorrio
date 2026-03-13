@@ -9,6 +9,35 @@ Spawn pi agents in tmux using the `subagent` CLI. Each subagent is a full pi ses
 
 Use subagents for anything that would consume a lot of your context — research, codebase exploration, builds, parallel tasks. Even a single subagent is useful.
 
+## Setup
+
+Before first use, check if everything is in place. Run through this list — skip anything already done.
+
+#### 1. tmux
+
+```bash
+which tmux || brew install tmux
+```
+
+#### 2. CLI symlink
+
+Resolve this skill's directory to find the package root (this file is at `skills/subagent/SKILL.md` — the package root is two levels up). Use that as `PACKAGE_DIR`.
+
+```bash
+chmod +x PACKAGE_DIR/skills/subagent/subagent.mjs
+ln -sf PACKAGE_DIR/skills/subagent/subagent.mjs ~/.local/bin/subagent
+```
+
+Make sure `~/.local/bin` is on PATH (the snorrio setup checklist handles this — if not done yet, load the **snorrio** skill).
+
+#### 3. Verify
+
+```bash
+which subagent && subagent list
+```
+
+If `subagent list` runs without error, you're set. The signal extension (`subagent-signal.ts`) is in the package's extensions directory and is loaded automatically by pi.
+
 ## CLI
 
 ```
@@ -25,7 +54,9 @@ subagent kill <name> [name...]                     # tear down named agents
 subagent list                                      # show all active sessions
 ```
 
-## Workspace convention
+## How it works
+
+### Workspace convention
 
 ```
 ~/agents/my-op/
@@ -38,93 +69,75 @@ subagent list                                      # show all active sessions
 
 Session names: `<dirname>-<name>` (e.g., `my-op-topic-a` for workspace `~/agents/my-op/` with prompt `topic-a.md`).
 
-## Failure signaling
+### Completion signaling
 
-Completion signaling is automatic:
+Automatic — no manual signaling needed:
 - **Normal completion:** extension signals `done-<name>` when the agent finishes.
 - **Crash/unexpected exit:** signals `failed-<name>` automatically.
 
-An agent can explicitly signal failure by touching a marker file and sending the signal:
+An agent can explicitly signal failure:
 ```bash
 touch /tmp/subagent-signaled-<name> && tmux wait-for -S "failed-<name>"
 ```
 
 `subagent wait` listens for both done and failed signals, prints results with timing, and exits with code 1 if any agent failed.
 
-## Multi-phase operations
+### Multi-phase operations
 
-When running phases (e.g., scouts then specialists), kill completed sessions between phases. Otherwise `subagent wait <workspace>` will find stale Phase 1 sessions and hang waiting for already-consumed signals.
+Kill completed sessions between phases. Otherwise `subagent wait` finds stale Phase 1 sessions and hangs.
 
 ```bash
 # Phase 1
 subagent spawn ~/agents/my-op scout-a scout-b scout-c
 subagent wait ~/agents/my-op
-subagent kill ~/agents/my-op    # clean up before Phase 2
+subagent kill ~/agents/my-op
 
 # Phase 2
 subagent spawn ~/agents/my-op specialist-a specialist-b
 subagent wait ~/agents/my-op
 ```
 
-Alternatively, use explicit names instead of prefix-based wait: `subagent wait specialist-a specialist-b`.
+Or use explicit names: `subagent wait specialist-a specialist-b`.
 
-## Example
+## Writing prompts
 
-```bash
-mkdir -p ~/agents/my-op/prompts ~/agents/my-op/output
-
-# Shared context for all agents
-cat > ~/agents/my-op/AGENTS.md << 'EOF'
-You are a research subagent. Write output to ~/agents/my-op/output/<your-name>.md.
-Search first. Don't write from training data.
-On tool errors: STOP and report what broke. Don't work around it.
-EOF
-
-# Individual task prompts
-cat > ~/agents/my-op/prompts/topic-a.md << 'EOF'
-Research topic A in depth.
-EOF
-
-cat > ~/agents/my-op/prompts/topic-b.md << 'EOF'
-Research topic B in depth.
-EOF
-
-# Spawn specific agents (not all prompts in the dir)
-subagent spawn ~/agents/my-op topic-a topic-b
-subagent status ~/agents/my-op
-subagent wait ~/agents/my-op
-subagent kill ~/agents/my-op
-```
-
-## Attach command
-
-After spawning subagents, always print the tmux attach command so Ludvig can watch them:
-
-```
-To watch: tmux attach -t <session-name>
-```
-
-For multiple agents, print one attach command per agent.
-
-## Prompts
-
-Subagents have the same skills and tools you do. You don't need to explain how to use them — just describe the task.
+Subagents have the same skills and tools you do. Don't over-explain how to use them — just describe the task.
 
 Include a contract: what to deliver, where to write it, what "done" means.
 
 Tell agents to stop and report problems rather than working around them. `"My web-search tool is broken"` is more useful than a partial report pulled from training data.
 
-## Installation
-
-The subagent CLI and signal extension are part of the snorrio package.
-
-**CLI** — symlink to PATH during setup:
+## Example
 
 ```bash
-chmod +x PACKAGE_DIR/skills/subagent/subagent.mjs
-ln -sf PACKAGE_DIR/skills/subagent/subagent.mjs ~/.local/bin/subagent
+mkdir -p ~/agents/research/prompts ~/agents/research/output
+
+cat > ~/agents/research/AGENTS.md << 'EOF'
+You are a research subagent. Write output to ~/agents/research/output/<your-name>.md.
+Search first. Don't write from training data.
+On tool errors: STOP and report what broke. Don't work around it.
+EOF
+
+cat > ~/agents/research/prompts/topic-a.md << 'EOF'
+Research topic A in depth. Write findings to output/topic-a.md.
+EOF
+
+cat > ~/agents/research/prompts/topic-b.md << 'EOF'
+Research topic B in depth. Write findings to output/topic-b.md.
+EOF
+
+subagent spawn ~/agents/research topic-a topic-b
+subagent wait ~/agents/research
+# Read output/topic-a.md and output/topic-b.md, then synthesize
+subagent kill ~/agents/research
 ```
 
-**Signal extension** — automatically loaded by pi from the package's extensions directory.
+## Watching agents work
 
-**Dependency**: `tmux` must be installed (`brew install tmux`).
+After spawning, attach to a tmux session to watch an agent in real time:
+
+```bash
+tmux attach -t <session-name>
+```
+
+Detach with `Ctrl-b d`. The agent keeps running.
