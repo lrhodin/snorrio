@@ -34,8 +34,14 @@ step "installing pi..."
 npm install -g @mariozechner/pi-coding-agent
 
 # --- snorrio ---
-step "installing snorrio..."
-pi install git:github.com/lrhodin/snorrio
+SNORRIO_SRC="git:github.com/lrhodin/snorrio"
+if pi list 2>/dev/null | grep -q "github.com/lrhodin/snorrio"; then
+  step "updating snorrio..."
+  pi update "$SNORRIO_SRC"
+else
+  step "installing snorrio..."
+  pi install "$SNORRIO_SRC"
+fi
 
 echo
 done_msg "ready. type: pi"
