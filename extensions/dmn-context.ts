@@ -64,9 +64,27 @@ export default function (pi: ExtensionAPI) {
     return { today, yesterday, week, month, quarter };
   }
 
+  function needsOnboarding(): boolean {
+    // No identity file → definitely needs onboarding
+    if (!fs.existsSync(path.join(HOME, ".pi/agent/APPEND_SYSTEM.md"))) return true;
+    // No config → needs setup
+    if (!fs.existsSync(path.join(HOME, ".config/snorrio/config.json"))) return true;
+    // No data directories → needs setup
+    if (!fs.existsSync(path.join(SNORRIO_HOME, "episodes"))) return true;
+    return false;
+  }
+
   pi.on("before_agent_start", async (event) => {
     if (injected) return;
     injected = true;
+
+    // Onboarding: if snorrio isn't set up, tell the agent to run it
+    if (needsOnboarding()) {
+      const onboarding = `\n\n## Snorrio: onboarding needed\n\nThis machine has snorrio installed but not yet configured. Before doing anything else, load the **snorrio** skill and follow the onboarding flow. Start by introducing yourself and asking the user's name.\n`;
+      return {
+        systemPrompt: event.systemPrompt + onboarding,
+      };
+    }
 
     const refs = getDateRefs();
 
