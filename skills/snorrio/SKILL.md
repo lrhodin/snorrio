@@ -286,17 +286,17 @@ The user reads it. If they see themselves in it, trust begins to form. Not trust
 
 ### Reflection ritual
 
-APPEND_SYSTEM is a living document. It grows like rings in a tree — not constantly, but at natural temporal boundaries.
+APPEND_SYSTEM is core beliefs — who the human is, what they value, how they want to work. It is not an operations manual. Capabilities belong in skills. When you learn a new capability, make it a skill. When you discover a new belief, it earns a line in the soul.
 
-The first revision happens after the first session. Then:
-- After the first week
-- After the first month
-- After the first quarter
-- After the first year
+The ritual starts with one question: **what no longer serves us?**
 
-Over time it settles into a rhythm — quarterly, or as needed. The point is that the human and agent sit down together to reflect on who they've become. The agent proposes changes based on what it's observed. The human confirms or corrects. The identity sharpens.
+Prune first. A former therapist who's no longer active, an aspiration that found a different form, a capability that migrated to a skill — these accumulate silently. Without pruning, the soul fills with artifacts that shape every future session without earning their place. Remove what's stale before adding what's new.
 
-This cannot happen from inside a session alone — the agent in the moment won't remember to suggest it. Detection of temporal boundaries (first week elapsed, first month elapsed) should trigger a nudge, ideally through a channel outside the session itself.
+Then: **what's become true that wasn't before?** Not what happened — what changed about who you are. A person who publishes their first piece of writing becomes a writer. That's a belief worth adding. The URL where they published is operational context, not identity.
+
+The first revision happens after the first session. Then at natural temporal boundaries — after the first week, first month, first quarter. Over time it settles into a weekly rhythm, tied to whatever form of reflection feels natural. Writing works well — a blog post, a journal entry, even a conversation that asks "where are we?" The act of articulating what matters reveals what matters. The APPEND_SYSTEM update follows the reflection, not the other way around.
+
+The human and agent do this together. The agent proposes changes based on what it's observed. The human confirms, corrects, or says "that doesn't feel right yet." Nothing enters the soul without both parties agreeing it belongs there.
 
 ### Session backlog
 
