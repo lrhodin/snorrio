@@ -134,15 +134,7 @@ subagent kill ~/agents/research
 
 ## Watching agents work
 
-**Always tell the user how to watch after spawning.** After every `subagent spawn`, print:
-
-```
-Watch: tmux attach -t <session-name>    (detach: Ctrl-b d)
-```
-
-This saves a round-trip. The user shouldn't have to ask.
-
-To attach:
+The spawn command outputs the tmux attach command. To watch an agent in real time:
 
 ```bash
 tmux attach -t <session-name>

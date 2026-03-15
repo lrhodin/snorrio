@@ -129,7 +129,7 @@ function spawnOne(sessionName, promptFile, workDir) {
   const piCmd = `SUBAGENT_SESSION=${esc(sessionName)} PI_CODING_AGENT_DIR=${esc(agentDir)} pi @${esc(resolvedPrompt)}; [ -f ${esc(marker)} ] || (touch ${esc(marker)} && tmux wait-for -S ${esc(`failed-${sessionName}`)})`;
   execSync(`tmux send-keys -t ${esc(sessionName)} ${esc(piCmd)} Enter`, { stdio: "inherit" });
 
-  console.log(`spawned ${sessionName} (agent-dir: ${agentDir})`);
+  console.log(`spawned ${sessionName} → tmux attach -t ${sessionName}`);
   return true;
 }
 
