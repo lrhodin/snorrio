@@ -17,8 +17,6 @@ export default function (pi: ExtensionAPI) {
   const SNORRIO_HOME = process.env.SNORRIO_HOME || path.join(HOME, ".snorrio");
   const CACHE_DIR = path.join(SNORRIO_HOME, "cache");
 
-  let injected = false;
-
   function readCache(level: string, key: string): string | null {
     try {
       return fs.readFileSync(path.join(CACHE_DIR, level, `${key}.md`), "utf8").trim() || null;
@@ -75,9 +73,6 @@ export default function (pi: ExtensionAPI) {
   }
 
   pi.on("before_agent_start", async (event) => {
-    if (injected) return;
-    injected = true;
-
     // Onboarding: if snorrio isn't set up, seed the agent with philosophy
     if (needsOnboarding()) {
       const onboarding = [
