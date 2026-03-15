@@ -40,10 +40,13 @@ export default function (pi: ExtensionAPI) {
       question: Type.String({
         description: "The question to ask the revived session or agent",
       }),
+      context: Type.Optional(Type.Boolean({
+        description: "Situated witness mode: load temporal context (day/week/month/quarter caches) from when the session ran. Only applies to session-level recall.",
+      })),
     }),
 
     async execute(toolCallId, params, signal, onUpdate) {
-      const { target, question } = params;
+      const { target, question, context: useContext } = params;
 
       onUpdate?.({
         content: [
@@ -53,7 +56,7 @@ export default function (pi: ExtensionAPI) {
 
       try {
         const engine = await getEngine();
-        const answer = await engine.recall(target, question);
+        const answer = await engine.recall(target, question, "haiku", { context: useContext });
         return {
           content: [{ type: "text" as const, text: `[recall: ${target} — "${question}"]\n\n${answer}` }],
           details: {

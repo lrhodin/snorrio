@@ -17,7 +17,7 @@
 
 import { readFileSync, readdirSync, statSync, existsSync, writeFileSync, mkdirSync } from "fs";
 import { join } from "path";
-import { resolveModel, complete, getText, userMessage, SNORRIO_HOME, piRoot } from "./ai.ts";
+import { resolveModel, complete, getText, userMessage, SNORRIO_HOME, piRoot, getTimezone } from "./ai.ts";
 
 const PI_ROOT = piRoot();
 const { loadEntriesFromFile, buildSessionContext } = await import(join(PI_ROOT, "dist/core/session-manager.js"));
@@ -45,6 +45,56 @@ function refType(ref) {
 }
 
 // ============================================================================
+// TEMPORAL CONTEXT — situated witness mode
+// ============================================================================
+
+function extractTimestamp(sessionFile: string): Date | null {
+  const basename = sessionFile.split("/").pop();
+  const match = basename?.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z_/);
+  if (!match) return null;
+  const [, y, mo, d, h, mi, s, ms] = match;
+  return new Date(`${y}-${mo}-${d}T${h}:${mi}:${s}.${ms}Z`);
+}
+
+function loadTemporalContext(timestamp: Date): string {
+  const tz = getTimezone();
+  const pt = new Date(timestamp.toLocaleString("en-US", { timeZone: tz }));
+
+  const today = `${pt.getFullYear()}-${String(pt.getMonth() + 1).padStart(2, "0")}-${String(pt.getDate()).padStart(2, "0")}`;
+
+  const dayOfYear = Math.floor((pt.getTime() - new Date(pt.getFullYear(), 0, 1).getTime()) / 86400000) + 1;
+  const dow = pt.getDay() || 7;
+  const wn = Math.floor((dayOfYear - dow + 10) / 7);
+  let wy = pt.getFullYear();
+  if (wn < 1) wy--;
+  const week = `${wy}-W${String(Math.max(1, wn)).padStart(2, "0")}`;
+
+  const month = today.slice(0, 7);
+  const m = pt.getMonth();
+  const q = Math.floor(m / 3) + 1;
+  const quarter = `${pt.getFullYear()}-Q${q}`;
+
+  function readCache(level: string, key: string): string | null {
+    try {
+      return readFileSync(join(CACHE_DIR, level, `${key}.md`), "utf8").trim() || null;
+    } catch { return null; }
+  }
+
+  const sections: string[] = [];
+  const dayCtx = readCache("days", today);
+  if (dayCtx) sections.push(`### That day (${today})\n${dayCtx}`);
+  const weekCtx = readCache("weeks", week);
+  if (weekCtx) sections.push(`### That week (${week})\n${weekCtx}`);
+  const monthCtx = readCache("months", month);
+  if (monthCtx) sections.push(`### That month (${month})\n${monthCtx}`);
+  const quarterCtx = readCache("quarters", quarter);
+  if (quarterCtx) sections.push(`### That quarter (${quarter})\n${quarterCtx}`);
+
+  if (sections.length === 0) return "";
+  return `\n\n## Temporal context (what was happening when this session ran)\n\n${sections.join("\n\n")}\n`;
+}
+
+// ============================================================================
 // SESSION RECALL
 // ============================================================================
 
@@ -66,7 +116,7 @@ function walk(dir, id) {
   return null;
 }
 
-function recallSession(sessionFile, question, resolved) {
+function recallSession(sessionFile, question, resolved, options: { context?: boolean } = {}) {
   const entries = loadEntriesFromFile(sessionFile);
   const sessionEntries = entries.filter(e => e.type !== "session");
   if (sessionEntries.length === 0) return "[recall: session has no entries]";
@@ -77,11 +127,17 @@ function recallSession(sessionFile, question, resolved) {
 
   if (!ctx.messages.length) return "[recall: session has no messages]";
 
+  let temporalCtx = "";
+  if (options.context) {
+    const ts = extractTimestamp(sessionFile);
+    if (ts) temporalCtx = loadTemporalContext(ts);
+  }
+
   const systemPrompt = `You are being revived to answer questions about a past session. You have full context from your original conversation — you're not reading a log, you're remembering.
 
 Answer directly from your experience. Be precise — include exact commands, error messages, file paths, numbers. When you know which subordinate sessions or dates are relevant, name them so the caller can drill in.
 
-If you don't know something, say so.`;
+If you don't know something, say so.${temporalCtx}`;
 
   const q = question + "\n\nRespond in plain text. Do not call any tools.";
 
@@ -366,7 +422,7 @@ async function apiCall(resolved, messages, systemPrompt) {
 // PUBLIC API
 // ============================================================================
 
-export async function recall(ref, question, modelSpec = "haiku") {
+export async function recall(ref, question, modelSpec = "haiku", options: { context?: boolean } = {}) {
   const resolved = await resolveModel(modelSpec);
   const type = refType(ref);
 
@@ -378,7 +434,7 @@ export async function recall(ref, question, modelSpec = "haiku") {
   // Session
   const file = ref.endsWith(".jsonl") ? ref : findSessionFile(ref);
   if (!file) return `[recall: session not found — ${ref}]`;
-  return recallSession(file, question, resolved);
+  return recallSession(file, question, resolved, options);
 }
 
 // Expose for episode daemon
@@ -398,10 +454,18 @@ if (process.argv[1]?.includes("recall-engine") || process.argv[1]?.includes("rec
     args.splice(modelIdx, 2);
   }
 
+  let context = false;
+  const contextIdx = args.indexOf("--context");
+  if (contextIdx !== -1) {
+    context = true;
+    args.splice(contextIdx, 1);
+  }
+
   if (args.length < 2) {
-    console.error("Usage: recall [--model <model>] <ref> \"question\"");
+    console.error("Usage: recall [--model <model>] [--context] <ref> \"question\"");
     console.error("  ref: session UUID, .jsonl path, YYYY-MM-DD (day), YYYY-Www (week), YYYY-MM (month), YYYY-QN (quarter)");
     console.error("  models: haiku (default), sonnet, opus");
+    console.error("  --context: load temporal context from when the session ran (situated witness)");
     process.exit(1);
   }
 
@@ -409,7 +473,7 @@ if (process.argv[1]?.includes("recall-engine") || process.argv[1]?.includes("rec
   const question = args.slice(1).join(" ");
 
   try {
-    const answer = await recall(ref, question, modelSpec);
+    const answer = await recall(ref, question, modelSpec, { context });
     console.log(answer);
   } catch (err) {
     console.error(`recall failed: ${err.message}`);
