@@ -293,6 +293,18 @@ function doWait(sessions) {
   };
 
   for (const name of sessions) {
+    // Check if already signaled (marker file written before we started listening)
+    const marker = `/tmp/subagent-signaled-${name}`;
+    try {
+      const content = readFileSync(marker, "utf-8").trim();
+      if (content === "done" || content === "failed") {
+        const status = content === "failed" ? "failed" : "done";
+        if (status === "failed") anyFailed = true;
+        console.log(`${status}: ${name} (already completed)`);
+        continue;
+      }
+    } catch {}
+
     const doneChild = spawn("tmux", ["wait-for", `done-${name}`], { stdio: "ignore" });
     const failedChild = spawn("tmux", ["wait-for", `failed-${name}`], { stdio: "ignore" });
 
@@ -309,6 +321,9 @@ function doWait(sessions) {
 
     pending.set(name, { doneChild, failedChild });
   }
+
+  // If all sessions were already completed, exit now
+  checkDone();
 
   // Watchdog: every 5s, check if pending sessions still exist in tmux.
   watchdog = setInterval(() => {
