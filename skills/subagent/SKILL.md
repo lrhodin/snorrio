@@ -9,6 +9,8 @@ Spawn pi agents in tmux using the `subagent` CLI. Each subagent is a full pi ses
 
 Use subagents for anything that would consume a lot of your context — research, codebase exploration, builds, parallel tasks. Even a single subagent is useful.
 
+**Core pattern:** `spawn` → `wait` → read output. Use `subagent wait` to block until agents complete — don't poll with `status` or `sleep`. Wait is token-efficient and reports results with timing automatically.
+
 ## Setup
 
 Before first use, check if everything is in place. Run through this list — skip anything already done.

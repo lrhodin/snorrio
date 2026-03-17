@@ -447,7 +447,7 @@ export { loadEpisodes, weekDates, monthWeeks, quarterMonths, weekHasData, monthH
 if (process.argv[1]?.includes("recall-engine") || process.argv[1]?.includes("recall")) {
   const args = process.argv.slice(2);
 
-  let modelSpec = "haiku";
+  let modelSpec = "opus";
   const modelIdx = args.indexOf("--model");
   if (modelIdx !== -1 && args[modelIdx + 1]) {
     modelSpec = args[modelIdx + 1];

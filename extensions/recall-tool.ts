@@ -56,7 +56,7 @@ export default function (pi: ExtensionAPI) {
 
       try {
         const engine = await getEngine();
-        const answer = await engine.recall(target, question, "haiku", { context: useContext });
+        const answer = await engine.recall(target, question, "opus", { context: useContext });
         return {
           content: [{ type: "text" as const, text: `[recall: ${target} — "${question}"]\n\n${answer}` }],
           details: {
