@@ -109,6 +109,15 @@ Include a contract: what to deliver, where to write it, what "done" means.
 
 Tell agents to stop and report problems rather than working around them. `"My web-search tool is broken"` is more useful than a partial report pulled from training data.
 
+### Keep your context clean
+
+The whole point of a subagent is isolation. **Do not read files you're asking the subagent to process.** Don't peek at a transcript to "get the path right," don't read a document to "write a better prompt." If you read it yourself, you've already consumed the context and the subagent buys you nothing.
+
+Give the subagent what it needs to *find* the file — a path, a directory to search, enough context to locate it. Trust that it can figure out the rest. It has the same tools you do.
+
+Bad: read the file → write a detailed prompt referencing its contents → spawn subagent
+Good: find the file path → tell the subagent where to look and what to do → spawn subagent
+
 ## Example
 
 ```bash
