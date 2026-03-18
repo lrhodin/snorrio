@@ -628,17 +628,78 @@ function startFlushWatcher() {
       timers.delete(filePath);
     }
     if (pending.length === 0) { log("Flush: 0 sessions to process"); return; }
+    log(`Flush: ${pending.length} pending`);
+
+    // Phase 1: Generate episodes (skip cascade — we'll do it ourselves)
+    globalThis._skipCascade = true;
     let processed = 0, failed = 0;
+    const dates = new Set();
     for (const [filePath] of pending) {
       if (inflight.has(filePath)) continue;
       inflight.add(filePath);
       try {
         const r = await generateEpisode(filePath);
-        if (r) processed++;
+        if (r) { processed++; dates.add(r.dateStr); }
       } catch (err) { log(`Flush error: ${err.message}`); failed++; }
       finally { inflight.delete(filePath); }
     }
+    globalThis._skipCascade = false;
+
+    // Phase 2: Regenerate day caches (blocking — /done waits for this)
+    for (const dateStr of dates) {
+      try {
+        log(`  Regenerating day cache: ${dateStr}`);
+        const daySummary = await recall(dateStr, CACHE_Q_DAY, "opus");
+        if (daySummary && !daySummary.startsWith("[recall:")) {
+          atomicWrite(join(CACHE_DIR, "days", `${dateStr}.md`), daySummary);
+        }
+      } catch (err) { log(`  Day cache error: ${err.message?.slice(0, 100)}`); }
+    }
+
+    // Emit summary — /done stops waiting here
     log(`Flush: ${processed} processed, ${pending.length - processed - failed} skipped, ${failed} failed`);
+
+    // Phase 3: Background cascade (week/month/quarter)
+    (async () => {
+      for (const dateStr of dates) {
+        const weekStr = dateToWeek(dateStr);
+        const monthStr = dateStr.slice(0, 7);
+
+        try {
+          log(`  [bg] Regenerating week cache: ${weekStr}`);
+          const weekSummary = await recall(weekStr, CACHE_Q_WEEK, "opus");
+          if (weekSummary && !weekSummary.startsWith("[recall:")) {
+            atomicWrite(join(CACHE_DIR, "weeks", `${weekStr}.md`), weekSummary);
+          }
+        } catch (err) { log(`  [bg] Week cache error: ${err.message?.slice(0, 100)}`); }
+
+        if (lastProcessedDate && lastProcessedDate !== dateStr) {
+          try {
+            log(`  [bg] Regenerating month cache: ${monthStr}`);
+            const monthSummary = await recall(monthStr, CACHE_Q_MONTH, "opus");
+            if (monthSummary && !monthSummary.startsWith("[recall:")) {
+              atomicWrite(join(CACHE_DIR, "months", `${monthStr}.md`), monthSummary);
+            }
+          } catch (err) { log(`  [bg] Month cache error: ${err.message?.slice(0, 100)}`); }
+        }
+
+        if (lastProcessedWeek && lastProcessedWeek !== weekStr) {
+          const quarterStr = monthToQuarter(monthStr);
+          try {
+            log(`  [bg] Regenerating quarter cache: ${quarterStr}`);
+            const quarterSummary = await recall(quarterStr, CACHE_Q_QUARTER, "opus");
+            if (quarterSummary && !quarterSummary.startsWith("[recall:")) {
+              atomicWrite(join(CACHE_DIR, "quarters", `${quarterStr}.md`), quarterSummary);
+            }
+          } catch (err) { log(`  [bg] Quarter cache error: ${err.message?.slice(0, 100)}`); }
+        }
+
+        lastProcessedDate = dateStr;
+        lastProcessedWeek = weekStr;
+        lastProcessedMonth = monthStr;
+      }
+      log("  [bg] Background cascade complete");
+    })().catch(err => log(`Background cascade error: ${err.message}`));
   }, 1000);
 }
 
