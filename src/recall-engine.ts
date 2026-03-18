@@ -17,7 +17,7 @@
 
 import { readFileSync, readdirSync, statSync, existsSync, writeFileSync, mkdirSync } from "fs";
 import { join } from "path";
-import { resolveModel, complete, getText, userMessage, SNORRIO_HOME, piRoot, getTimezone } from "./ai.ts";
+import { resolveModel, complete, stream as aiStream, getText, userMessage, SNORRIO_HOME, piRoot, getTimezone } from "./ai.ts";
 
 const PI_ROOT = piRoot();
 const { loadEntriesFromFile, buildSessionContext } = await import(join(PI_ROOT, "dist/core/session-manager.js"));
@@ -116,7 +116,7 @@ function walk(dir, id) {
   return null;
 }
 
-function recallSession(sessionFile, question, resolved, options: { context?: boolean } = {}) {
+function recallSession(sessionFile, question, resolved, options: { context?: boolean; onChunk?: OnChunk } = {}) {
   const entries = loadEntriesFromFile(sessionFile);
   const sessionEntries = entries.filter(e => e.type !== "session");
   if (sessionEntries.length === 0) return "[recall: session has no entries]";
@@ -141,7 +141,7 @@ If you don't know something, say so.${temporalCtx}`;
 
   const q = question + "\n\nRespond in plain text. Do not call any tools.";
 
-  return apiCall(resolved, [...ctx.messages, userMessage(q)], systemPrompt);
+  return apiCallStream(resolved, [...ctx.messages, userMessage(q)], systemPrompt, options.onChunk);
 }
 
 // ============================================================================
@@ -189,7 +189,7 @@ function loadEpisodes(dateStr) {
   return episodes;
 }
 
-function recallDay(dateStr, question, resolved) {
+function recallDay(dateStr, question, resolved, onChunk?: OnChunk) {
   const episodes = loadEpisodes(dateStr);
   if (episodes.length === 0) return `[recall: no episodes found for ${dateStr}]`;
 
@@ -204,7 +204,7 @@ Answer from these episodes. Be precise — include session IDs, exact details, t
 If the episodes don't contain enough detail to answer, say which session(s) likely have the answer.`;
 
   const messages = [userMessage(context + "\n\n---\n\n" + question)];
-  return apiCall(resolved, messages, systemPrompt);
+  return apiCallStream(resolved, messages, systemPrompt, onChunk);
 }
 
 // ============================================================================
@@ -228,7 +228,7 @@ function weekDates(weekStr) {
   return dates;
 }
 
-async function recallWeek(weekStr, question, resolved, modelSpec) {
+async function recallWeek(weekStr, question, resolved, modelSpec, onChunk?: OnChunk) {
   const dates = weekDates(weekStr);
   const daySummaries = [];
 
@@ -263,7 +263,7 @@ Answer from these summaries. Identify the main threads, arc, and trajectory acro
 If the summaries don't contain enough detail, say which day likely has the answer.`;
 
   const messages = [userMessage(context + "\n\n---\n\n" + question)];
-  return apiCall(resolved, messages, systemPrompt);
+  return apiCallStream(resolved, messages, systemPrompt, onChunk);
 }
 
 // ============================================================================
@@ -302,7 +302,7 @@ function weekHasData(weekStr) {
   return dates.some(d => loadEpisodes(d).length > 0);
 }
 
-async function recallMonth(monthStr, question, resolved, modelSpec) {
+async function recallMonth(monthStr, question, resolved, modelSpec, onChunk?: OnChunk) {
   const weeks = monthWeeks(monthStr);
   const weekSummaries = [];
 
@@ -338,7 +338,7 @@ Answer from these summaries. Identify the trajectory across the month — what e
 If the summaries don't contain enough detail, say which week likely has the answer.`;
 
   const messages = [userMessage(context + "\n\n---\n\n" + question)];
-  return apiCall(resolved, messages, systemPrompt);
+  return apiCallStream(resolved, messages, systemPrompt, onChunk);
 }
 
 // ============================================================================
@@ -357,7 +357,7 @@ function monthHasData(monthStr) {
   return weeks.some(w => weekHasData(w));
 }
 
-async function recallQuarter(quarterStr, question, resolved, modelSpec) {
+async function recallQuarter(quarterStr, question, resolved, modelSpec, onChunk?: OnChunk) {
   const months = quarterMonths(quarterStr);
   const monthSummaries = [];
 
@@ -391,7 +391,7 @@ You exist at the highest temporal resolution available. From here you can see pa
 When detail is needed, name the specific month, week, or day so the caller can drill deeper.`;
 
   const messages = [userMessage(context + "\n\n---\n\n" + question)];
-  const result = await apiCall(resolved, messages, systemPrompt);
+  const result = await apiCallStream(resolved, messages, systemPrompt, onChunk);
 
   const cachePath = join(CACHE_DIR, "quarters", `${quarterStr}.md`);
   if (!existsSync(cachePath) && result && !result.startsWith("[recall:")) {
@@ -418,23 +418,54 @@ async function apiCall(resolved, messages, systemPrompt) {
   return getText(result);
 }
 
+type OnChunk = (accumulated: string) => void;
+
+async function apiCallStream(resolved, messages, systemPrompt, onChunk?: OnChunk) {
+  if (!onChunk) return apiCall(resolved, messages, systemPrompt);
+
+  const eventStream = aiStream(resolved, messages, systemPrompt);
+  let accumulated = "";
+
+  for await (const event of eventStream) {
+    if (event.type === "text_delta") {
+      accumulated += event.delta;
+      onChunk(accumulated);
+    }
+  }
+
+  // After for-await, stream is exhausted. Use .result() if available (EventStream),
+  // otherwise fall back to accumulated text.
+  if (typeof (eventStream as any).result === "function") {
+    const result = await (eventStream as any).result();
+    if (result.stopReason === "error") {
+      const errMsg = result.errorMessage || "unknown API error";
+      const match = errMsg.match(/"message":"([^"]+)"/);
+      return `[recall: API error — ${match ? match[1] : errMsg.slice(0, 200)}]`;
+    }
+    return getText(result);
+  }
+
+  return accumulated || "[recall: empty response from API]";
+}
+
 // ============================================================================
 // PUBLIC API
 // ============================================================================
 
-export async function recall(ref, question, modelSpec = "haiku", options: { context?: boolean } = {}) {
+export async function recall(ref, question, modelSpec = "haiku", options: { context?: boolean; onChunk?: OnChunk } = {}) {
   const resolved = await resolveModel(modelSpec);
   const type = refType(ref);
+  const { onChunk } = options;
 
-  if (type === "day") return recallDay(ref, question, resolved);
-  if (type === "week") return recallWeek(ref, question, resolved, modelSpec);
-  if (type === "month") return recallMonth(ref, question, resolved, modelSpec);
-  if (type === "quarter") return recallQuarter(ref, question, resolved, modelSpec);
+  if (type === "day") return recallDay(ref, question, resolved, onChunk);
+  if (type === "week") return recallWeek(ref, question, resolved, modelSpec, onChunk);
+  if (type === "month") return recallMonth(ref, question, resolved, modelSpec, onChunk);
+  if (type === "quarter") return recallQuarter(ref, question, resolved, modelSpec, onChunk);
 
   // Session
   const file = ref.endsWith(".jsonl") ? ref : findSessionFile(ref);
   if (!file) return `[recall: session not found — ${ref}]`;
-  return recallSession(file, question, resolved, options);
+  return recallSession(file, question, resolved, { context: options.context, onChunk });
 }
 
 // Expose for episode daemon

@@ -7,13 +7,13 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 
 export default function (pi: ExtensionAPI) {
-  let _engine: any;
+  let _enginePromise: Promise<any> | null = null;
   async function getEngine() {
-    if (!_engine) {
+    if (!_enginePromise) {
       const path = new URL("../src/recall-engine.ts", import.meta.url).pathname;
-      _engine = await import(path);
+      _enginePromise = import(path);
     }
-    return _engine;
+    return _enginePromise;
   }
 
   pi.registerTool({
@@ -47,18 +47,30 @@ export default function (pi: ExtensionAPI) {
 
     async execute(toolCallId, params, signal, onUpdate) {
       const { target, question, context: useContext } = params;
+      const header = `[recall: ${target} — "${question}"]`;
 
       onUpdate?.({
-        content: [
-          { type: "text" as const, text: `Recalling ${target}: "${question}"` },
-        ],
+        content: [{ type: "text" as const, text: `Recalling ${target}...` }],
       });
 
       try {
         const engine = await getEngine();
-        const answer = await engine.recall(target, question, "opus", { context: useContext });
+
+        const onChunk = onUpdate
+          ? (accumulated: string) => {
+              onUpdate({
+                content: [{ type: "text" as const, text: `${header}\n\n${accumulated}` }],
+              });
+            }
+          : undefined;
+
+        const answer = await engine.recall(target, question, "opus", {
+          context: useContext,
+          onChunk,
+        });
+
         return {
-          content: [{ type: "text" as const, text: `[recall: ${target} — "${question}"]\n\n${answer}` }],
+          content: [{ type: "text" as const, text: `${header}\n\n${answer}` }],
           details: {
             target,
             questionLength: question.length,
@@ -70,7 +82,7 @@ export default function (pi: ExtensionAPI) {
           content: [
             {
               type: "text" as const,
-              text: `[recall: ${target} — "${question}"]\n\nRecall failed: ${err.message?.slice(0, 300)}`,
+              text: `${header}\n\nRecall failed: ${err.message?.slice(0, 300)}`,
             },
           ],
           details: { error: "failed", target },
