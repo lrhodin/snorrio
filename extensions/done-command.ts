@@ -30,6 +30,7 @@ export default function (pi: ExtensionAPI) {
           spinIdx = (spinIdx + 1) % SPINNER.length;
 
           if (Date.now() - started > 300_000) {
+            ctx.ui.notify("DMN flush timed out (5m)", "warn");
             ctx.ui.setWidget("done", undefined);
             clearInterval(poll);
             return;
@@ -55,9 +56,9 @@ export default function (pi: ExtensionAPI) {
           const text = buf.toString("utf8");
 
           if (text.includes("Flush: 0 sessions to process")) {
-            ctx.ui.setWidget("done", ["✓ All sessions up to date"]);
+            ctx.ui.notify("✓ All sessions up to date", "info");
+            ctx.ui.setWidget("done", undefined);
             clearInterval(poll);
-            setTimeout(() => ctx.ui.setWidget("done", undefined), 5000);
             return;
           }
 
@@ -65,11 +66,11 @@ export default function (pi: ExtensionAPI) {
           if (m) {
             const processed = Number(m[1]);
             const failed = Number(m[3]);
-            let msg = `✓ ${processed} processed`;
+            let msg = `✓ DMN: ${processed} processed`;
             if (failed > 0) msg += `, ${failed} failed`;
-            ctx.ui.setWidget("done", [msg]);
+            ctx.ui.notify(msg, failed > 0 ? "warn" : "info");
+            ctx.ui.setWidget("done", undefined);
             clearInterval(poll);
-            setTimeout(() => ctx.ui.setWidget("done", undefined), 5000);
             return;
           }
 
