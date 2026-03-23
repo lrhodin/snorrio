@@ -108,10 +108,22 @@ which recall 2>/dev/null
 #    cc: check for SessionStart hook in ~/.claude/settings.json
 ```
 
-If the source symlink is missing, the installer wasn't run:
+If the source symlink is missing, create it by finding the clone:
+
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lrhodin/snorrio/main/install.sh | bash
+# Pi clone?
+[ -d ~/.pi/agent/git/github.com/lrhodin/snorrio ] && \
+  ln -sfn ~/.pi/agent/git/github.com/lrhodin/snorrio ~/.snorrio/src
+
+# CC clone?
+[ -d ~/.claude/plugins/marketplaces/snorrio ] && \
+  ln -sfn ~/.claude/plugins/marketplaces/snorrio ~/.snorrio/src
 ```
+
+If neither clone exists, the user needs to install first:
+- **Pi:** `pi install git:github.com/lrhodin/snorrio`
+- **CC:** `claude plugin marketplace add https://github.com/lrhodin/snorrio && claude plugin install snorrio@snorrio`
+- **Either:** `curl -fsSL https://raw.githubusercontent.com/lrhodin/snorrio/main/install.sh | bash`
 
 ### Install steps
 
