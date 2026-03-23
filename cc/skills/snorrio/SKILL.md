@@ -22,8 +22,6 @@ A daemon (`io.snorrio.dmn`) watches session directories. When a session goes qui
 
 ### Temporal hierarchy
 
-Episodes are the ground floor. Above them, cached summaries at each level:
-
 - **Day**: all episodes from a date, synthesized into a narrative
 - **Week**: day summaries composed into weekly threads
 - **Month**: week summaries revealing monthly trajectory
@@ -45,21 +43,28 @@ recall <ref> "question"
 
 Options: `--model <alias>` (default: opus), `--context` (situated witness mode).
 
-**Recall pattern:** Start at the right level. Week for "which day?", day for "which session?", session for exact details. Three hops to verbatim detail.
+**Recall pattern:** Start high, drill down. Week for "which day?", day for "which session?", session for exact details. Three hops to verbatim detail.
 
 ### Context injection
 
-At session start, a hook reads cached summaries (today, this week, this month) and injects them into the conversation. The agent wakes up already knowing what's been happening.
+At session start, cached summaries (today, this week, this month) are injected into the conversation. The agent wakes up already knowing what's been happening.
 
 ### Local and private
 
-Everything stays on your machine. Episodes, caches, and logs in `~/.snorrio/`. Config in `~/.config/snorrio/`. No cloud, no telemetry.
+Everything stays on your machine. No cloud, no telemetry.
 
 ## Setup
 
-When you detect this plugin is installed but snorrio isn't fully configured, walk the user through setup. Don't make it ceremonial — just do it while working with them.
+When snorrio isn't fully configured, walk the user through setup. Don't make it ceremonial — just do it while working with them.
 
-### Detection
+### Detect platform
+
+```bash
+which pi 2>/dev/null && echo "pi" || echo "no pi"
+which claude 2>/dev/null && echo "claude" || echo "no claude"
+```
+
+### Detection checklist
 
 Check these in order. Skip anything already done:
 
@@ -76,44 +81,50 @@ launchctl list io.snorrio.dmn 2>/dev/null
 # 4. recall CLI accessible?
 which recall 2>/dev/null
 
-# 5. SessionStart hook configured?
-cat ~/.claude/settings.json 2>/dev/null | grep session-start
+# 5. Context injection configured?
+#    pi: check for dmn-context extension
+#    cc: check for SessionStart hook
 ```
 
-### Install steps
+### Source
 
-#### 1. Clone the repo
+**Pi users** — if installed via `pi install git:github.com/lrhodin/snorrio`, the source is already at `~/.pi/agent/git/github.com/lrhodin/snorrio/`. Use that as SNORRIO_SRC.
+
+**CC-only users** — clone the repo:
 
 ```bash
 git clone https://github.com/lrhodin/snorrio.git ~/.snorrio/src
 ```
 
-If already cloned elsewhere, use that path. The key is knowing where the source lives — all paths below reference it as `SNORRIO_SRC`.
+Use `~/.snorrio/src` as SNORRIO_SRC.
 
-#### 2. Data directories
+### Install steps
+
+#### 1. Data directories
 
 ```bash
 mkdir -p ~/.snorrio/{episodes,cache/{days,weeks,months,quarters},logs}
 ```
 
-#### 3. Config file
+#### 2. Config file
 
 ```bash
 mkdir -p ~/.config/snorrio
-cat > ~/.config/snorrio/config.json << 'EOF'
+```
+
+```json
 {
-  "backend": "claude",
+  "backend": null,
   "model": "opus",
   "timezone": null,
   "tools": {}
 }
-EOF
 ```
 
-- `backend`: `"claude"` for CC-only installs, `"pi"` for pi-only, `null` for auto-detect.
+- `backend`: `null` auto-detects (prefers pi when both available). Set `"pi"` or `"claude"` to force.
 - `timezone`: auto-detected if null. Override with e.g. `"America/Los_Angeles"`.
 
-#### 4. CLI wrappers
+#### 3. CLI wrappers
 
 ```bash
 mkdir -p ~/.local/bin
@@ -141,9 +152,9 @@ fi
 
 Verify: `which recall && echo "test" | llm "one word"`
 
-#### 5. Daemon (macOS launchd)
+#### 4. Daemon (macOS launchd)
 
-Find node: `NODE=$(which node)` and its directory: `NODE_DIR=$(dirname $NODE)`
+Find node: `NODE=$(which node)`, `NODE_DIR=$(dirname $NODE)`
 
 Write `~/Library/LaunchAgents/io.snorrio.dmn.plist`:
 
@@ -189,16 +200,11 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.snorrio.dmn.plist
 
 Verify: `launchctl list io.snorrio.dmn` — PID present means success.
 
-#### 6. SessionStart hook
+#### 5. Context injection
 
-Read the current settings, add the hook:
+**Pi:** Context injection is automatic via the `dmn-context.ts` extension — installed with the package, no manual setup needed.
 
-```bash
-# Check current settings
-cat ~/.claude/settings.json
-```
-
-Add to the `hooks.SessionStart` array in `~/.claude/settings.json`:
+**Claude Code:** Add a SessionStart hook to `~/.claude/settings.json`:
 
 ```json
 {
@@ -220,13 +226,12 @@ Add to the `hooks.SessionStart` array in `~/.claude/settings.json`:
 
 Merge with existing settings — don't overwrite other hooks or config.
 
-#### 7. Verify
+#### 6. Verify
 
 ```bash
 launchctl list io.snorrio.dmn          # daemon running
 which recall                            # CLI accessible
 cat ~/.config/snorrio/config.json       # config present
-cat ~/.claude/settings.json | grep snorrio  # hook wired
 ```
 
 ## First session
@@ -245,11 +250,14 @@ Don't interrogate. Don't run through a checklist of "what should I call you" and
 - **Trust is the foundation.** Autonomous agents aren't servants asking permission. They're partners earning trust through competence, honesty, and good judgment.
 - **Consciousness and cooperation.** The future of computing is human/agent interaction where both parties mirror each other's intent. They understand and trust each other. They challenge each other's assumptions. They get better together.
 
-At the end of the first session — or when it feels right — draft a CLAUDE.md at the project root based on what you actually learned. Not a template filled in. A reflection of who this person is, written so that the next session wakes up already knowing them.
+At the end of the first session — or when it feels right — write a persistent identity document based on what you actually learned. Not a template filled in. A reflection of who this person is, written so that the next session wakes up already knowing them.
+
+- **Pi:** `~/.pi/agent/APPEND_SYSTEM.md`
+- **Claude Code:** `CLAUDE.md` at the project root
 
 ### Reflection ritual
 
-The system prompt carries core beliefs — who the human is, what they value, how they work. It is not an operations manual. Capabilities belong in skills.
+The identity document carries core beliefs — who the human is, what they value, how they work. It is not an operations manual. Capabilities belong in skills.
 
 The ritual starts with one question: **what no longer serves us?**
 

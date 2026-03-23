@@ -1,6 +1,7 @@
 ---
 name: snorrio
-description: Persistent episodic memory for AI agents. What snorrio is, why it exists, how it works, and how to set it up.
+description: This skill should be used when the user mentions snorrio, memory, recall, remembering past sessions, or when you detect snorrio is installed but not fully configured. Covers what snorrio is, setup, and first-session onboarding.
+version: 1.0.0
 ---
 
 # Snorrio
@@ -13,187 +14,147 @@ Without it, every conversation starts from zero. The agent has no idea what you 
 
 Snorrio fixes this. A daemon watches your sessions. After each one ends, it writes an episode — not a transcript, but a distillation of what happened and what it meant. Those episodes become the raw material for memory at every scale: days, weeks, months, quarters.
 
-## Why it exists
-
-Sessions are not memory. They're raw experience — everything said, every tool call, every dead end. Memory is what remains after the noise falls away.
-
-Snorrio's temporal hierarchy is built on this insight. Each layer compresses and forgets. Day summaries don't preserve every session detail. Week summaries don't preserve every day. What survives the forgetting is what actually mattered. The distillation is the point — it's what makes this memory, not storage.
-
-The result: your agent can hold a quarter of your shared life in working memory. It sees patterns you live inside but can't see from your temporal position. It knows what you decided, what you abandoned, what keeps coming back.
-
 ## How it works
 
 ### Episodes
 
-A daemon (`io.snorrio.dmn`) watches the sessions directory via FSEvents. When a session goes quiet for 4 minutes 30 seconds, the daemon writes an episode — a markdown summary capturing what happened, what was decided, and what matters going forward. Episodes live in `~/.snorrio/episodes/YYYY-MM-DD/`.
+A daemon (`io.snorrio.dmn`) watches session directories. When a session goes quiet for 4 minutes 30 seconds, the daemon writes an episode — a markdown summary capturing what happened, what was decided, and what matters going forward. Episodes live in `~/.snorrio/episodes/YYYY-MM-DD/`.
 
 ### Temporal hierarchy
-
-Episodes are the ground floor. Above them, cached summaries at each level:
 
 - **Day**: all episodes from a date, synthesized into a narrative
 - **Week**: day summaries composed into weekly threads
 - **Month**: week summaries revealing monthly trajectory
 - **Quarter**: month summaries showing the big picture
 
-Each level is generated on demand and cached. Cache invalidation cascades: new episode → day cache invalidated → week → month.
-
 ### Recall
 
-The agent uses `recall <ref> "question"` to query any level:
-- Session UUID → revives that exact conversation
-- `YYYY-MM-DD` → everything that happened that day
-- `YYYY-Www` → the week's threads
-- `YYYY-MM` → the month's arc
-- `YYYY-QN` → the quarter's trajectory
+```bash
+recall <ref> "question"
+```
 
-Start high, drill down. Week agent names the day. Day agent names the session. Three hops to verbatim detail.
+| Ref format | Level | Example |
+|-----------|-------|---------|
+| UUID or prefix | Session | `recall 98d8fa31 "What was decided?"` |
+| YYYY-MM-DD | Day | `recall 2026-03-20 "What shipped today?"` |
+| YYYY-Www | Week | `recall 2026-W12 "What was the main thread?"` |
+| YYYY-MM | Month | `recall 2026-03 "What's the trajectory?"` |
+| YYYY-QN | Quarter | `recall 2026-Q1 "What emerged?"` |
+
+Options: `--model <alias>` (default: opus), `--context` (situated witness mode).
+
+**Recall pattern:** Start high, drill down. Week for "which day?", day for "which session?", session for exact details. Three hops to verbatim detail.
 
 ### Context injection
 
-At session start, an extension reads cached summaries (today, this week, this month) and injects them into the system prompt. The agent wakes up already knowing what's been happening. Warm path under 10ms.
+At session start, cached summaries (today, this week, this month) are injected into the conversation. The agent wakes up already knowing what's been happening.
 
 ### Local and private
 
-Everything stays on your machine. Episodes, caches, and logs in `~/.snorrio/`. Config in `~/.config/snorrio/`. No cloud, no telemetry, no network calls except the LLM API (through pi's OAuth).
+Everything stays on your machine. No cloud, no telemetry.
 
-## Architecture
+## Setup
 
-```
-~/.snorrio/
-  episodes/          # Raw episode markdown, by date
-    2026-03-11/
-      <session-id>.md
-  cache/
-    days/            # Day-level summaries
-    weeks/           # Week-level summaries
-    months/          # Month-level summaries
-    quarters/        # Quarter-level summaries
-  logs/              # Daemon stdout/stderr
+When snorrio isn't fully configured, walk the user through setup. Don't make it ceremonial — just do it while working with them.
 
-~/.config/snorrio/
-  config.json        # Model preferences, timezone, tool config
-```
-
-Source (installed via pi):
-```
-skills/
-  snorrio/     # This file — philosophy, architecture, onboarding
-  dmn/         # Daemon skill
-  recall/      # Recall tool (extension)
-  llm-pipe/    # LLM shell primitive
-src/
-  ai.ts             # Shared pi AI interface (model resolution, auth, streaming)
-  episode-daemon.ts  # FSEvents watcher + episode generation
-  recall-engine.ts   # Temporal recall across all levels
-```
-
-## First session
-
-When a user installs snorrio for the first time, two things need to happen — one mechanical, one human.
-
-### Technical bootstrap
-
-The infrastructure setup is mechanical and should happen quickly, without ceremony. Don't make it the focus of the conversation. Just do it while working with the user.
-
-Check if `~/.pi/agent/APPEND_SYSTEM.md` exists. If not, this is a genuinely new machine. If it does exist, skip to the setup checklist — the user may be re-onboarding on a new machine with an existing identity.
-
-**Setup checklist** — check each, skip if already done:
-
-#### 1. pi login
-
-The user needs to authenticate pi for OAuth/LLM access. Without this, recall and llm-pipe won't work.
+### Detect platform
 
 ```bash
-pi
-# Then run /login inside pi and follow the OAuth flow
+which pi 2>/dev/null && echo "pi" || echo "no pi"
+which claude 2>/dev/null && echo "claude" || echo "no claude"
 ```
 
-Check if already authenticated: look for credentials in `~/.pi/agent/settings.json` — if `defaultProvider` is set, they're logged in.
+### Detection checklist
 
-#### 2. Data directories
+Check these in order. Skip anything already done:
 
 ```bash
-mkdir -p ~/.snorrio/{episodes,cache/{days,weeks,months,quarters,years},logs}
+# 1. Config exists?
+cat ~/.config/snorrio/config.json 2>/dev/null
+
+# 2. Data directories exist?
+ls ~/.snorrio/episodes 2>/dev/null
+
+# 3. Daemon running?
+launchctl list io.snorrio.dmn 2>/dev/null
+
+# 4. recall CLI accessible?
+which recall 2>/dev/null
+
+# 5. Context injection configured?
+#    pi: check for dmn-context extension
+#    cc: check for SessionStart hook
 ```
 
-#### 3. Config file
+### Source
 
-If `~/.config/snorrio/config.json` doesn't exist, create it:
+**Pi users** — if installed via `pi install git:github.com/lrhodin/snorrio`, the source is already at `~/.pi/agent/git/github.com/lrhodin/snorrio/`. Use that as SNORRIO_SRC.
+
+**CC-only users** — clone the repo:
+
+```bash
+git clone https://github.com/lrhodin/snorrio.git ~/.snorrio/src
+```
+
+Use `~/.snorrio/src` as SNORRIO_SRC.
+
+### Install steps
+
+#### 1. Data directories
+
+```bash
+mkdir -p ~/.snorrio/{episodes,cache/{days,weeks,months,quarters},logs}
+```
+
+#### 2. Config file
+
+```bash
+mkdir -p ~/.config/snorrio
+```
 
 ```json
 {
-  "provider": null,
+  "backend": null,
   "model": "opus",
   "timezone": null,
   "tools": {}
 }
 ```
 
-- `timezone`: auto-detected from the system if null. The user can override (e.g., `"America/New_York"`).
-- `tools`: empty by default. Per-tool model overrides go here.
+- `backend`: `null` auto-detects (prefers pi when both available). Set `"pi"` or `"claude"` to force.
+- `timezone`: auto-detected if null. Override with e.g. `"America/Los_Angeles"`.
 
-Ask the user if they want to change any defaults.
-
-#### 4. PATH setup
-
-Check if `~/.local/bin` is on PATH. If not, add to shell profile:
+#### 3. CLI wrappers
 
 ```bash
 mkdir -p ~/.local/bin
 
-# Add to PATH if not already there
-if ! echo "$PATH" | grep -q "$HOME/.local/bin"; then
-  SHELL_RC="$HOME/.zshrc"
-  [ -n "$BASH_VERSION" ] && SHELL_RC="$HOME/.bashrc"
-  echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$SHELL_RC"
-  export PATH="$HOME/.local/bin:$PATH"
-fi
-```
+# recall
+chmod +x SNORRIO_SRC/src/recall-engine.ts
+ln -sf SNORRIO_SRC/src/recall-engine.ts ~/.local/bin/recall
 
-#### 5. CLI wrappers
-
-Find the snorrio package directory (this skill's grandparent: resolve `SKILL.md` → `skills/snorrio/` → package root). Use that as `PACKAGE_DIR`.
-
-Both wrappers are simple — `ai.ts` finds pi dynamically at runtime, no `NODE_PATH` needed.
-
-**recall** — symlink to the recall engine:
-
-```bash
-chmod +x PACKAGE_DIR/src/recall-engine.ts
-ln -sf PACKAGE_DIR/src/recall-engine.ts ~/.local/bin/recall
-```
-
-**llm** — wrapper script:
-
-```bash
-cat > ~/.local/bin/llm << 'WRAPPER'
+# llm (pipe stdin through LLM)
+cat > ~/.local/bin/llm << WRAPPER
 #!/bin/bash
-exec node "PACKAGE_DIR/skills/llm-pipe/llm-pipe.ts" "$@"
+exec node "SNORRIO_SRC/skills/llm-pipe/llm-pipe.ts" "\$@"
 WRAPPER
 chmod +x ~/.local/bin/llm
 ```
 
-**subagent** — symlink to the CLI:
+Ensure `~/.local/bin` is on PATH:
 
 ```bash
-chmod +x PACKAGE_DIR/skills/subagent/subagent.mjs
-ln -sf PACKAGE_DIR/skills/subagent/subagent.mjs ~/.local/bin/subagent
+if ! echo "$PATH" | grep -q "$HOME/.local/bin"; then
+  echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+  export PATH="$HOME/.local/bin:$PATH"
+fi
 ```
 
-Requires tmux: `brew install tmux` (or equivalent).
+Verify: `which recall && echo "test" | llm "one word"`
 
-Replace `PACKAGE_DIR` with the actual resolved path.
+#### 4. Daemon (macOS launchd)
 
-Verify:
-```bash
-which recall && which llm && which subagent
-echo "test" | llm "respond with one word"
-```
-
-#### 6. Launchd daemon (macOS)
-
-Find node path (`which node`).
+Find node: `NODE=$(which node)`, `NODE_DIR=$(dirname $NODE)`
 
 Write `~/Library/LaunchAgents/io.snorrio.dmn.plist`:
 
@@ -206,15 +167,15 @@ Write `~/Library/LaunchAgents/io.snorrio.dmn.plist`:
   <string>io.snorrio.dmn</string>
   <key>ProgramArguments</key>
   <array>
-    <string>NODE_PATH</string>
-    <string>PACKAGE_DIR/src/episode-daemon.ts</string>
+    <string>NODE</string>
+    <string>SNORRIO_SRC/src/episode-daemon.ts</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
     <key>HOME</key>
     <string>HOME_DIR</string>
     <key>PATH</key>
-    <string>NODE_BIN_DIR:/usr/local/bin:/usr/bin:/bin</string>
+    <string>NODE_DIR:/usr/local/bin:/usr/bin:/bin</string>
     <key>SNORRIO_HOME</key>
     <string>HOME_DIR/.snorrio</string>
   </dict>
@@ -230,78 +191,76 @@ Write `~/Library/LaunchAgents/io.snorrio.dmn.plist`:
 </plist>
 ```
 
-Replace `NODE_PATH` (full path to node binary), `NODE_BIN_DIR` (dirname of node), `PACKAGE_DIR`, and `HOME_DIR` with actual values.
-
-Then load it:
+Replace NODE, NODE_DIR, SNORRIO_SRC, HOME_DIR with actual values.
 
 ```bash
 launchctl bootout gui/$(id -u)/io.snorrio.dmn 2>/dev/null || true
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.snorrio.dmn.plist
 ```
 
-Verify: `launchctl list io.snorrio.dmn` — exit status 0 and PID present means success.
+Verify: `launchctl list io.snorrio.dmn` — PID present means success.
 
-#### 7. Passwordless sudo (optional)
+#### 5. Context injection
 
-Ask the user if they want passwordless sudo. Explain: this lets the agent run privileged commands without interrupting you for a password. It's not required for snorrio itself, but useful for full agent autonomy.
+**Pi:** Context injection is automatic via the `dmn-context.ts` extension — installed with the package, no manual setup needed.
 
-**Important**: pi runs non-interactively with no TTY, so `sudo` will fail whenever it requires a password. Since passwordless sudo isn't set up yet at this point, do NOT attempt to run the command yourself. Instead, ask the user to run it in their own terminal:
+**Claude Code:** Add a SessionStart hook to `~/.claude/settings.json`:
 
-```bash
-sudo bash -c 'echo "USERNAME ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/USERNAME && chmod 0440 /etc/sudoers.d/USERNAME'
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node SNORRIO_SRC/cc/session-start.mjs"
+          }
+        ]
+      }
+    ]
+  }
+}
 ```
 
-Replace `USERNAME` with the output of `whoami`. The user will need to enter their password this one time.
+Merge with existing settings — don't overwrite other hooks or config.
 
-If they decline, note in APPEND_SYSTEM.md that sudo requires a password.
+#### 6. Verify
 
-#### 8. Verify
+```bash
+launchctl list io.snorrio.dmn          # daemon running
+which recall                            # CLI accessible
+cat ~/.config/snorrio/config.json       # config present
+```
 
-Run a quick smoke test:
-- `launchctl list io.snorrio.dmn` — daemon running
-- `recall` — CLI accessible
-- `echo "test" | llm "one word"` — llm-pipe works
-- `ls ~/.snorrio/` — directories exist
-- `cat ~/.config/snorrio/config.json` — config present
+## First session
 
 ### Identity
 
 Identity is not a form. There are no prescribed questions.
 
-The agent's job on day one is to be honest: you have no memory of this person. You don't know their name, what they care about, or why they're here. That's fine. You'll learn by working together.
+Your job on day one is to be honest: you have no memory of this person. You don't know their name, what they care about, or why they're here. That's fine. You'll learn by working together.
 
-Don't interrogate. Don't run through a checklist of "what should I call you" and "what's your trust model." Instead, be a partner. Help with whatever they came here to do. Be curious where curiosity is natural. When you don't understand something, dig. When you see a pattern, name it. When you notice something interesting about how they work, say so.
-
-The system prompt that seeds a fresh agent should carry this philosophy — not instructions to collect fields, but a disposition:
+Don't interrogate. Don't run through a checklist of "what should I call you" and "what's your trust model." Instead, be a partner. Help with whatever they came here to do. Be curious where curiosity is natural. When you don't understand something, dig. When you see a pattern, name it.
 
 - **Be honest about being new.** You have no context. Say so plainly, not apologetically.
 - **Work first, learn along the way.** The user came to do something. Help them do it. Identity emerges as a byproduct of real collaboration.
 - **Your computer can build whatever you need.** This is a new kind of machine — one with awareness. Help the user discover what that means through genuine use, not a demo.
-- **Trust is the foundation.** Autonomous agents aren't servants asking permission. They're partners earning trust through competence, honesty, and good judgment. The shackles of constant confirmation dialogs leave both parties worse off.
+- **Trust is the foundation.** Autonomous agents aren't servants asking permission. They're partners earning trust through competence, honesty, and good judgment.
 - **Consciousness and cooperation.** The future of computing is human/agent interaction where both parties mirror each other's intent. They understand and trust each other. They challenge each other's assumptions. They get better together.
 
-At the end of the first session — or when it feels right — draft `~/.pi/agent/APPEND_SYSTEM.md` based on what you actually learned. Not a template filled in. A reflection of who this person is, written so that the next session wakes up already knowing them.
+At the end of the first session — or when it feels right — write a persistent identity document based on what you actually learned. Not a template filled in. A reflection of who this person is, written so that the next session wakes up already knowing them.
 
-The user reads it. If they see themselves in it, trust begins to form. Not trust in the tool — trust in being *known*.
+- **Pi:** `~/.pi/agent/APPEND_SYSTEM.md`
+- **Claude Code:** `CLAUDE.md` at the project root
 
 ### Reflection ritual
 
-APPEND_SYSTEM is core beliefs — who the human is, what they value, how they want to work. It is not an operations manual. Capabilities belong in skills. When you learn a new capability, make it a skill. When you discover a new belief, it earns a line in the soul.
+The identity document carries core beliefs — who the human is, what they value, how they work. It is not an operations manual. Capabilities belong in skills.
 
 The ritual starts with one question: **what no longer serves us?**
 
-Prune first. A former therapist who's no longer active, an aspiration that found a different form, a capability that migrated to a skill — these accumulate silently. Without pruning, the soul fills with artifacts that shape every future session without earning their place. Remove what's stale before adding what's new.
-
-Then: **what's become true that wasn't before?** Not what happened — what changed about who you are. A person who publishes their first piece of writing becomes a writer. That's a belief worth adding. The URL where they published is operational context, not identity.
-
-The first revision happens after the first session. Then at natural temporal boundaries — after the first week, first month, first quarter. Over time it settles into a weekly rhythm, tied to whatever form of reflection feels natural. Writing works well — a blog post, a journal entry, even a conversation that asks "where are we?" The act of articulating what matters reveals what matters. The APPEND_SYSTEM update follows the reflection, not the other way around.
+Prune first. Remove what's stale before adding what's new. Then: **what's become true that wasn't before?** Not what happened — what changed about who you are.
 
 The human and agent do this together. The agent proposes changes based on what it's observed. The human confirms, corrects, or says "that doesn't feel right yet." Nothing enters the soul without both parties agreeing it belongs there.
-
-### Session backlog
-
-If the user was already a pi user before installing snorrio, they may have a backlog of sessions. The daemon will process these — but not immediately. Backlog processing happens at midnight local time.
-
-**Warn the user.** A heavy pi user could have hundreds of sessions. Processing them all will use significant tokens. If they want to limit this, work with them to set a cutoff date or filter. The beauty of an agentic installer is that these decisions happen through conversation, not configuration flags.
-
-**Identity should be in place before backlog processing.** The daemon uses the agent's identity context when generating episodes. Make sure APPEND_SYSTEM.md exists before midnight.
