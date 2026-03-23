@@ -4,15 +4,11 @@ description: This skill should be used when you need to remember past sessions, 
 version: 1.0.0
 ---
 
-# Recall — Query Past Sessions and Temporal Summaries
-
-## Usage
+# Recall
 
 ```bash
 recall <ref> "question"
 ```
-
-### Reference types
 
 | Ref format | Level | Example |
 |-----------|-------|---------|
@@ -22,53 +18,8 @@ recall <ref> "question"
 | YYYY-MM | Month | `recall 2026-03 "What's the trajectory?"` |
 | YYYY-QN | Quarter | `recall 2026-Q1 "What emerged this quarter?"` |
 
-### Options
-
-- `--model <model>` — Model to use (default: opus). Aliases: haiku, sonnet, opus.
-- `--context` — Load temporal context from when the session ran (situated witness mode).
-
-### Recall pattern
+Options: `--model <alias>` (default: opus), `--context` (situated witness mode).
 
 Start at the right level. Week for "which day?", day for "which session?", session for exact details. Three hops to verbatim detail.
 
-## Setup
-
-The recall CLI is at `~/.snorrio/bin/recall` (symlinked at install). If it's not on your PATH, run it directly:
-
-```bash
-node /path/to/snorrio/src/recall-engine.ts <ref> "question"
-```
-
-### Hook setup
-
-For automatic context injection at session start, add to `~/.claude/settings.json`:
-
-```json
-{
-  "hooks": {
-    "SessionStart": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node /path/to/snorrio/cc/session-start.mjs"
-          }
-        ]
-      }
-    ]
-  }
-}
-```
-
-Replace `/path/to/snorrio` with the actual path where snorrio is installed (check `~/.snorrio` or the git clone location).
-
-### Daemon
-
-The episode daemon (`io.snorrio.dmn`) must be running to generate episodes from sessions. Check with:
-
-```bash
-launchctl list | grep snorrio
-```
-
-If not running, the recall CLI will still work for temporal queries (day/week/month/quarter) if cached summaries exist, but session-level recall requires episodes to be generated first.
+If recall isn't working, read the snorrio skill (`/snorrio`) for setup instructions.
