@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // Episode pipeline daemon.
 //
-// Watches session files. After 4:30 of inactivity on a file, generates an
-// episode via direct LLM call. Midnight sweep catches anything missed.
+// Watches pi and CC session files. After 4:30 of inactivity on a file,
+// generates an episode. Pi sessions use buildSessionContext + complete().
+// CC sessions use claude --resume. Midnight sweep catches anything missed.
 //
 // No manifest. No state tracking. Idempotent — episodes overwrite freely.
 // No minimum message threshold — every session with an assistant message
@@ -31,16 +32,29 @@ import {
 } from "fs";
 import { join, basename } from "path";
 import { hostname as osHostname } from "os";
-import { resolveModel, complete, getText, userMessage, SNORRIO_HOME, piRoot, getTimezone } from "./ai.ts";
+import { complete, getText, userMessage, claudeResume, SNORRIO_HOME, piRoot, getTimezone } from "./ai.ts";
 import { recall } from "./recall-engine.ts";
+import {
+  detectPlatform, sessionIdFromPath, sessionIdFromEntries,
+  sessionTimestamps as metaTimestamps, hasAssistantMessage as metaHasAssistant,
+  extractCwd, allSessions as metaAllSessions, type Platform, type SessionInfo,
+} from "./session-meta.ts";
 
-const PI_ROOT = piRoot();
-const { loadEntriesFromFile, buildSessionContext } = await import(
-  join(PI_ROOT, "dist/core/session-manager.js")
-);
+// Lazy pi session manager — only loaded when processing pi sessions
+let _piSessionManager: any;
 
-const HOME = process.env.HOME;
-const SESSIONS_DIR = join(HOME, ".pi/agent/sessions");
+async function getPiSessionManager() {
+  if (!_piSessionManager) {
+    const root = piRoot();
+    if (!root) throw new Error("pi not installed — cannot process pi sessions");
+    _piSessionManager = await import(join(root, "dist/core/session-manager.js"));
+  }
+  return _piSessionManager;
+}
+
+const HOME = process.env.HOME!;
+const PI_SESSIONS_DIR = join(HOME, ".pi/agent/sessions");
+const CC_PROJECTS_DIR = join(HOME, ".claude/projects");
 const EPISODES_DIR = join(SNORRIO_HOME, "episodes");
 const CACHE_DIR = join(SNORRIO_HOME, "cache");
 
@@ -56,7 +70,7 @@ function getMachine() {
 }
 const MACHINE = getMachine();
 
-function buildFrontmatter(origin, sourcePath, timestamp) {
+function buildFrontmatter(origin: string, sourcePath: string, timestamp: string) {
   const source = sourcePath.startsWith(HOME) ? "~" + sourcePath.slice(HOME.length) : sourcePath;
   return `---\norigin: ${origin}\nmachine: ${MACHINE}\nsource: ${source}\ntimestamp: ${timestamp}\n---\n\n`;
 }
@@ -64,13 +78,13 @@ function buildFrontmatter(origin, sourcePath, timestamp) {
 const timers = new Map();
 const inflight = new Set();
 
-let lastProcessedDate = null;
-let lastProcessedWeek = null;
-let lastProcessedMonth = null;
+let lastProcessedDate: string | null = null;
+let lastProcessedWeek: string | null = null;
+let lastProcessedMonth: string | null = null;
 
 const LOG_DIR = join(SNORRIO_HOME, "logs");
 mkdirSync(LOG_DIR, { recursive: true });
-function log(msg) {
+function log(msg: string) {
   const line = `[DMN] ${new Date().toISOString()} ${msg}\n`;
   process.stderr.write(line);
   try {
@@ -83,38 +97,21 @@ function log(msg) {
 // SESSION HELPERS
 // ============================================================================
 
-function toDateStr(iso) {
+function toDateStr(iso: string) {
   return new Intl.DateTimeFormat("en-CA", {
     timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit",
   }).format(new Date(iso));
 }
 
-function parseSession(filePath) {
+// Parse pi session entries — only used for pi sessions that need buildSessionContext
+function parsePiSession(filePath: string) {
   const raw = readFileSync(filePath, "utf8");
-  const entries = [];
+  const entries: any[] = [];
   for (const line of raw.split("\n")) {
     if (!line.trim()) continue;
     try { entries.push(JSON.parse(line)); } catch {}
   }
   return entries;
-}
-
-function sessionId(entries) {
-  return entries.find(e => e.type === "session")?.id || null;
-}
-
-function sessionTimestamps(entries) {
-  const ts = entries.map(e => e.timestamp).filter(Boolean)
-    .map(t => new Date(t).getTime()).filter(t => !isNaN(t));
-  if (!ts.length) return { start: null, end: null };
-  return {
-    start: new Date(Math.min(...ts)).toISOString(),
-    end: new Date(Math.max(...ts)).toISOString(),
-  };
-}
-
-function hasAssistantMessage(entries) {
-  return entries.some(e => e.type === "message" && e.message?.role === "assistant");
 }
 
 // ============================================================================
@@ -123,44 +120,66 @@ function hasAssistantMessage(entries) {
 
 const EPISODE_SYSTEM = `You write journal entries from coding agent sessions. An entry captures both what was done and what was discussed — the actions, the reasoning, the intent behind them. Include concrete details where they matter: files changed, commands run, decisions made. But equally capture the conversation: what ideas came up, what got debated, what the human cared about, what the tone and energy was. Note session IDs of related sessions when referenced.`;
 
-async function generateEpisode(filePath) {
-  const entries = parseSession(filePath);
-  const id = sessionId(entries);
+const EPISODE_PROMPT = "Write a journal entry for this session.\n\nRespond in plain text. Do not call any tools.";
+
+async function generateEpisode(filePath: string) {
+  const platform = detectPlatform(filePath);
+  const id = sessionIdFromEntries(filePath);
   if (!id) { log(`  No session ID: ${basename(filePath)}`); return null; }
 
-  if (!hasAssistantMessage(entries)) return null;
+  if (!metaHasAssistant(filePath)) return null;
 
-  const sessionEntries = entries.filter(e => e.type !== "session");
-  let ctx;
-  try {
-    ctx = buildSessionContext(sessionEntries);
-  } catch (err) {
-    log(`  Context failed ${id.slice(0, 8)}: ${err.message?.slice(0, 200)}`);
-    return null;
-  }
-  if (!ctx.messages.length) { log(`  Empty context: ${id.slice(0, 8)}`); return null; }
-
-  const { start, end } = sessionTimestamps(entries);
+  const { start, end } = metaTimestamps(filePath);
   const dateStr = toDateStr(end || start || new Date().toISOString());
 
-  log(`  Generating: ${id.slice(0, 8)} (${dateStr})`);
+  log(`  Generating: ${id.slice(0, 8)} (${dateStr}) [${platform}]`);
 
-  const resolved = await resolveModel(null, "dmn");
-  const messages = [
-    ...ctx.messages,
-    userMessage("Write a journal entry for this session.\n\nRespond in plain text. Do not call any tools."),
-  ];
+  let text: string;
 
-  const result = await complete(resolved, messages, EPISODE_SYSTEM);
-  if (result.stopReason === "error") {
-    log(`  API error ${id.slice(0, 8)}: ${(result.errorMessage || "").slice(0, 200)}`);
-    return null;
+  if (platform === "cc") {
+    const cwd = extractCwd(filePath);
+    if (!cwd) { log(`  No cwd in CC session: ${id.slice(0, 8)}`); return null; }
+
+    try {
+      text = await claudeResume(id, EPISODE_PROMPT, cwd, {
+        appendSystemPrompt: EPISODE_SYSTEM,
+        toolName: "dmn",
+      });
+    } catch (err: any) {
+      log(`  CC error ${id.slice(0, 8)}: ${err.message?.slice(0, 200)}`);
+      return null;
+    }
+  } else {
+    // Pi session — use buildSessionContext + complete()
+    const { loadEntriesFromFile, buildSessionContext } = await getPiSessionManager();
+    const entries = loadEntriesFromFile(filePath);
+    const sessionEntries = entries.filter((e: any) => e.type !== "session");
+
+    let ctx: any;
+    try { ctx = buildSessionContext(sessionEntries); }
+    catch (err: any) {
+      log(`  Context failed ${id.slice(0, 8)}: ${err.message?.slice(0, 200)}`);
+      return null;
+    }
+    if (!ctx.messages.length) { log(`  Empty context: ${id.slice(0, 8)}`); return null; }
+
+    const messages = [
+      ...ctx.messages,
+      userMessage(EPISODE_PROMPT),
+    ];
+
+    const result = await complete(messages, EPISODE_SYSTEM, null, "dmn");
+    if (result.stopReason === "error") {
+      log(`  API error ${id.slice(0, 8)}: ${(result.errorMessage || "").slice(0, 200)}`);
+      return null;
+    }
+
+    text = getText(result);
   }
 
-  const text = getText(result);
-  if (!text) { log(`  Empty output: ${id.slice(0, 8)}`); return null; }
+  if (!text?.trim()) { log(`  Empty output: ${id.slice(0, 8)}`); return null; }
 
-  const fm = buildFrontmatter("pi", filePath, end || start || new Date().toISOString());
+  const fm = buildFrontmatter(platform === "cc" ? "cc" : "pi", filePath, end || start || new Date().toISOString());
   const dir = join(EPISODES_DIR, dateStr);
   mkdirSync(dir, { recursive: true });
   const epPath = join(dir, `${id}.md`);
@@ -181,9 +200,9 @@ async function generateEpisode(filePath) {
 // TEMPORAL HELPERS
 // ============================================================================
 
-function dateToWeek(dateStr) {
+function dateToWeek(dateStr: string) {
   const dt = new Date(dateStr + "T12:00:00Z");
-  const dayOfYear = Math.floor((dt - new Date(dt.getFullYear(), 0, 1)) / 86400000) + 1;
+  const dayOfYear = Math.floor(((dt as any) - (new Date(dt.getFullYear(), 0, 1) as any)) / 86400000) + 1;
   const dow = dt.getDay() || 7;
   const wn = Math.floor((dayOfYear - dow + 10) / 7);
   let wy = dt.getFullYear();
@@ -196,12 +215,12 @@ function dateToWeek(dateStr) {
   return `${wy}-W${String(Math.max(1, wn)).padStart(2, "0")}`;
 }
 
-function monthToQuarter(monthStr) {
+function monthToQuarter(monthStr: string) {
   const [year, month] = monthStr.split("-").map(Number);
   return `${year}-Q${Math.ceil(month / 3)}`;
 }
 
-function atomicWrite(filePath, content) {
+function atomicWrite(filePath: string, content: string) {
   const dir = join(filePath, "..");
   mkdirSync(dir, { recursive: true });
   const tmp = filePath + ".tmp";
@@ -214,7 +233,7 @@ const CACHE_Q_WEEK = "Write a narrative of this week so far — an essay, not a 
 const CACHE_Q_MONTH = "Write a narrative of this month so far — an essay, not a checklist. What shifted, what themes emerged or faded, what's shaping the direction? Don't restate weekly details — just what's visible at the monthly level. You're the continuity layer across week boundaries — any active threads a new week needs to carry forward should be here, with enough context to find the right week. Reference specific weeks so the reader can navigate down.";
 const CACHE_Q_QUARTER = "Write a narrative of this quarter so far — an essay, not a checklist. What's the arc, what materialized that wasn't there at the start, what's building? Don't restate monthly details — just what's visible from this altitude. You're the continuity layer across month boundaries — any arcs a new month needs to carry forward should be here, with enough context to find the right month. Reference specific months so the reader can navigate down.";
 
-async function cascadeForDate(dateStr) {
+async function cascadeForDate(dateStr: string) {
   const weekStr = dateToWeek(dateStr);
   const monthStr = dateStr.slice(0, 7);
 
@@ -222,26 +241,26 @@ async function cascadeForDate(dateStr) {
     log(`  Regenerating day cache: ${dateStr}`);
     const daySummary = await recall(dateStr, CACHE_Q_DAY, "opus");
     if (daySummary && !daySummary.startsWith("[recall:")) {
-      atomicWrite(join(CACHE_DIR, "days", `${dateStr}.md`), daySummary);
+      atomicWrite(join(CACHE_DIR, "days", `${dateStr}.md`), daySummary as string);
     }
-  } catch (err) { log(`  Day cache error: ${err.message?.slice(0, 100)}`); }
+  } catch (err: any) { log(`  Day cache error: ${err.message?.slice(0, 100)}`); }
 
   try {
     log(`  Regenerating week cache: ${weekStr}`);
     const weekSummary = await recall(weekStr, CACHE_Q_WEEK, "opus");
     if (weekSummary && !weekSummary.startsWith("[recall:")) {
-      atomicWrite(join(CACHE_DIR, "weeks", `${weekStr}.md`), weekSummary);
+      atomicWrite(join(CACHE_DIR, "weeks", `${weekStr}.md`), weekSummary as string);
     }
-  } catch (err) { log(`  Week cache error: ${err.message?.slice(0, 100)}`); }
+  } catch (err: any) { log(`  Week cache error: ${err.message?.slice(0, 100)}`); }
 
   if (lastProcessedDate && lastProcessedDate !== dateStr) {
     log(`  Day boundary → regenerating month cache: ${monthStr}`);
     try {
       const monthSummary = await recall(monthStr, CACHE_Q_MONTH, "opus");
       if (monthSummary && !monthSummary.startsWith("[recall:")) {
-        atomicWrite(join(CACHE_DIR, "months", `${monthStr}.md`), monthSummary);
+        atomicWrite(join(CACHE_DIR, "months", `${monthStr}.md`), monthSummary as string);
       }
-    } catch (err) { log(`  Month cache error: ${err.message?.slice(0, 100)}`); }
+    } catch (err: any) { log(`  Month cache error: ${err.message?.slice(0, 100)}`); }
   }
 
   if (lastProcessedWeek && lastProcessedWeek !== weekStr) {
@@ -250,9 +269,9 @@ async function cascadeForDate(dateStr) {
     try {
       const quarterSummary = await recall(quarterStr, CACHE_Q_QUARTER, "opus");
       if (quarterSummary && !quarterSummary.startsWith("[recall:")) {
-        atomicWrite(join(CACHE_DIR, "quarters", `${quarterStr}.md`), quarterSummary);
+        atomicWrite(join(CACHE_DIR, "quarters", `${quarterStr}.md`), quarterSummary as string);
       }
-    } catch (err) { log(`  Quarter cache error: ${err.message?.slice(0, 100)}`); }
+    } catch (err: any) { log(`  Quarter cache error: ${err.message?.slice(0, 100)}`); }
   }
 
   lastProcessedDate = dateStr;
@@ -264,7 +283,7 @@ async function cascadeForDate(dateStr) {
 // WATCHER
 // ============================================================================
 
-function onSessionChange(filePath) {
+function onSessionChange(filePath: string) {
   if (!filePath.endsWith(".jsonl")) return;
   if (timers.has(filePath)) clearTimeout(timers.get(filePath));
   timers.set(filePath, setTimeout(async () => {
@@ -273,70 +292,64 @@ function onSessionChange(filePath) {
     inflight.add(filePath);
     log(`Debounce fired: ${basename(filePath).slice(0, 50)}`);
     try { await generateEpisode(filePath); }
-    catch (err) { log(`Error: ${err.message}`); }
+    catch (err: any) { log(`Error: ${err.message}`); }
     finally { inflight.delete(filePath); }
   }, DEBOUNCE_MS));
 }
 
 function startWatcher() {
-  log(`Watching ${SESSIONS_DIR}`);
-  watch(SESSIONS_DIR, { recursive: true }, (_, filename) => {
-    if (!filename?.endsWith(".jsonl")) return;
-    onSessionChange(join(SESSIONS_DIR, filename));
-  });
+  // Watch pi sessions
+  if (existsSync(PI_SESSIONS_DIR)) {
+    log(`Watching pi: ${PI_SESSIONS_DIR}`);
+    watch(PI_SESSIONS_DIR, { recursive: true }, (_, filename) => {
+      if (!filename?.endsWith(".jsonl")) return;
+      onSessionChange(join(PI_SESSIONS_DIR, filename));
+    });
+  }
+
+  // Watch CC sessions
+  if (existsSync(CC_PROJECTS_DIR)) {
+    log(`Watching cc: ${CC_PROJECTS_DIR}`);
+    watch(CC_PROJECTS_DIR, { recursive: true }, (_, filename) => {
+      if (!filename?.endsWith(".jsonl")) return;
+      onSessionChange(join(CC_PROJECTS_DIR, filename));
+    });
+  }
 }
 
 // ============================================================================
 // SWEEP / REPROCESS
 // ============================================================================
 
-function allSessions() {
-  const files = [];
-  (function walk(dir) {
-    try {
-      for (const d of readdirSync(dir, { withFileTypes: true })) {
-        const p = join(dir, d.name);
-        if (d.isDirectory()) walk(p);
-        else if (d.name.endsWith(".jsonl")) files.push(p);
-      }
-    } catch {}
-  })(SESSIONS_DIR);
-  return files;
-}
-
 async function sweep() {
   log("Sweep starting...");
   globalThis._skipCascade = true;
-  const files = allSessions();
+  const sessions = metaAllSessions();
   let count = 0, skip = 0;
   const CONCURRENCY = parseInt(process.env.REPROCESS_CONCURRENCY || "8");
-  const touchedDays = new Set();
+  const touchedDays = new Set<string>();
 
-  const todo = [];
-  for (const f of files) {
-    const entries = parseSession(f);
-    const id = sessionId(entries);
-    if (!id || !hasAssistantMessage(entries)) continue;
-    const { start, end } = sessionTimestamps(entries);
+  const todo: SessionInfo[] = [];
+  for (const s of sessions) {
+    if (!metaHasAssistant(s.path)) continue;
+    const { start, end } = metaTimestamps(s.path);
     const dateStr = toDateStr(end || start || new Date().toISOString());
-    if (existsSync(join(EPISODES_DIR, dateStr, `${id}.md`))) { skip++; continue; }
-    todo.push(f);
+    if (existsSync(join(EPISODES_DIR, dateStr, `${s.id}.md`))) { skip++; continue; }
+    todo.push(s);
   }
   log(`  ${todo.length} sessions need episodes, ${skip} already exist (concurrency: ${CONCURRENCY})`);
 
-  const pool = new Set();
-  for (const f of todo) {
+  const pool = new Set<Promise<void>>();
+  for (const s of todo) {
     if (pool.size >= CONCURRENCY) await Promise.race(pool);
     const p = (async () => {
       try {
-        const r = await generateEpisode(f);
+        const r = await generateEpisode(s.path);
         if (r) { count++; touchedDays.add(r.dateStr); }
-      } catch (err) {
-        const entries = parseSession(f);
-        const id = sessionId(entries);
-        log(`Sweep error ${id?.slice(0, 8)}: ${err.message}`);
+      } catch (err: any) {
+        log(`Sweep error ${s.id.slice(0, 8)}: ${err.message}`);
       }
-    })().then(() => pool.delete(p));
+    })().then(() => { pool.delete(p); });
     pool.add(p);
   }
   await Promise.all(pool);
@@ -349,9 +362,9 @@ async function sweep() {
   await Promise.all(days.map(async (d) => {
     try {
       const summary = await recall(d, CACHE_Q_DAY, "opus");
-      if (summary && !summary.startsWith("[recall:")) atomicWrite(join(CACHE_DIR, "days", `${d}.md`), summary);
+      if (summary && !summary.startsWith("[recall:")) atomicWrite(join(CACHE_DIR, "days", `${d}.md`), summary as string);
       log(`    ${d} ✓`);
-    } catch (err) { log(`    ${d} ✗ ${err.message?.slice(0, 100)}`); }
+    } catch (err: any) { log(`    ${d} ✗ ${err.message?.slice(0, 100)}`); }
   }));
 
   const weeks = [...new Set(days.map(d => dateToWeek(d)))].sort();
@@ -359,9 +372,9 @@ async function sweep() {
   await Promise.all(weeks.map(async (w) => {
     try {
       const summary = await recall(w, CACHE_Q_WEEK, "opus");
-      if (summary && !summary.startsWith("[recall:")) atomicWrite(join(CACHE_DIR, "weeks", `${w}.md`), summary);
+      if (summary && !summary.startsWith("[recall:")) atomicWrite(join(CACHE_DIR, "weeks", `${w}.md`), summary as string);
       log(`    ${w} ✓`);
-    } catch (err) { log(`    ${w} ✗ ${err.message?.slice(0, 100)}`); }
+    } catch (err: any) { log(`    ${w} ✗ ${err.message?.slice(0, 100)}`); }
   }));
 
   const months = [...new Set(days.map(d => d.slice(0, 7)))].sort();
@@ -369,9 +382,9 @@ async function sweep() {
   await Promise.all(months.map(async (m) => {
     try {
       const summary = await recall(m, CACHE_Q_MONTH, "opus");
-      if (summary && !summary.startsWith("[recall:")) atomicWrite(join(CACHE_DIR, "months", `${m}.md`), summary);
+      if (summary && !summary.startsWith("[recall:")) atomicWrite(join(CACHE_DIR, "months", `${m}.md`), summary as string);
       log(`    ${m} ✓`);
-    } catch (err) { log(`    ${m} ✗ ${err.message?.slice(0, 100)}`); }
+    } catch (err: any) { log(`    ${m} ✗ ${err.message?.slice(0, 100)}`); }
   }));
 
   const quarters = [...new Set(months.map(m => { const [y, mm] = m.split("-"); return `${y}-Q${Math.ceil(parseInt(mm) / 3)}`; }))].sort();
@@ -379,9 +392,9 @@ async function sweep() {
   await Promise.all(quarters.map(async (q) => {
     try {
       const summary = await recall(q, CACHE_Q_QUARTER, "opus");
-      if (summary && !summary.startsWith("[recall:")) atomicWrite(join(CACHE_DIR, "quarters", `${q}.md`), summary);
+      if (summary && !summary.startsWith("[recall:")) atomicWrite(join(CACHE_DIR, "quarters", `${q}.md`), summary as string);
       log(`    ${q} ✓`);
-    } catch (err) { log(`    ${q} ✗ ${err.message?.slice(0, 100)}`); }
+    } catch (err: any) { log(`    ${q} ✗ ${err.message?.slice(0, 100)}`); }
   }));
 
   globalThis._skipCascade = false;
@@ -394,7 +407,7 @@ async function sweep() {
 
 const LEVELS = ["episode", "day", "week", "month", "quarter", "year"];
 
-function parseRange(ref) {
+function parseRange(ref: string) {
   if (/^\d{4}-\d{2}-\d{2}$/.test(ref)) return { type: "day", ref };
   if (/^\d{4}-W\d{1,2}$/.test(ref)) {
     const [y, w] = ref.split("-W");
@@ -406,7 +419,7 @@ function parseRange(ref) {
   return null;
 }
 
-function weekDatesLocal(weekStr) {
+function weekDatesLocal(weekStr: string) {
   const [yearStr, weekNum] = weekStr.split("-W");
   const year = parseInt(yearStr);
   const week = parseInt(weekNum);
@@ -414,7 +427,7 @@ function weekDatesLocal(weekStr) {
   const dayOfWeek = jan4.getDay() || 7;
   const monday = new Date(jan4);
   monday.setDate(jan4.getDate() - dayOfWeek + 1 + (week - 1) * 7);
-  const dates = [];
+  const dates: string[] = [];
   for (let i = 0; i < 7; i++) {
     const d = new Date(monday);
     d.setDate(monday.getDate() + i);
@@ -423,9 +436,9 @@ function weekDatesLocal(weekStr) {
   return dates;
 }
 
-function monthDates(monthStr) {
+function monthDates(monthStr: string) {
   const [year, month] = monthStr.split("-").map(Number);
-  const dates = [];
+  const dates: string[] = [];
   const d = new Date(year, month - 1, 1);
   while (d.getMonth() === month - 1) {
     dates.push(d.toISOString().slice(0, 10));
@@ -434,48 +447,47 @@ function monthDates(monthStr) {
   return dates;
 }
 
-function monthWeeksLocal(monthStr) {
+function monthWeeksLocal(monthStr: string) {
   const dates = monthDates(monthStr);
   return [...new Set(dates.map(d => dateToWeek(d)))].sort();
 }
 
-function quarterMonthsLocal(quarterStr) {
+function quarterMonthsLocal(quarterStr: string) {
   const [yearStr, qStr] = quarterStr.split("-Q");
   const q = parseInt(qStr);
   const start = (q - 1) * 3 + 1;
   return [0, 1, 2].map(i => `${yearStr}-${String(start + i).padStart(2, "0")}`);
 }
 
-function yearQuarters(yearStr) {
+function yearQuarters(yearStr: string) {
   return [1, 2, 3, 4].map(q => `${yearStr}-Q${q}`);
 }
 
-function rangeToDays(range) {
+function rangeToDays(range: { type: string; ref: string }): string[] {
   switch (range.type) {
     case "day": return [range.ref];
     case "week": return weekDatesLocal(range.ref);
     case "month": return monthDates(range.ref);
     case "quarter": return quarterMonthsLocal(range.ref).flatMap(m => monthDates(m));
     case "year": return yearQuarters(range.ref).flatMap(q => quarterMonthsLocal(q).flatMap(m => monthDates(m)));
+    default: return [];
   }
 }
 
-function sessionsForDays(days) {
+function sessionsForDays(days: string[]) {
   const daySet = new Set(days);
-  const files = allSessions();
-  const matched = [];
-  for (const f of files) {
-    const entries = parseSession(f);
-    const id = sessionId(entries);
-    if (!id || !hasAssistantMessage(entries)) continue;
-    const { start, end } = sessionTimestamps(entries);
+  const sessions = metaAllSessions();
+  const matched: SessionInfo[] = [];
+  for (const s of sessions) {
+    if (!metaHasAssistant(s.path)) continue;
+    const { start, end } = metaTimestamps(s.path);
     const dateStr = toDateStr(end || start || new Date().toISOString());
-    if (daySet.has(dateStr)) matched.push(f);
+    if (daySet.has(dateStr)) matched.push(s);
   }
   return matched;
 }
 
-async function reprocess(rangeStr, depthStr) {
+async function reprocess(rangeStr: string, depthStr?: string) {
   const range = parseRange(rangeStr);
   if (!range) { log(`Invalid range: ${rangeStr}`); process.exit(1); }
 
@@ -496,51 +508,62 @@ async function reprocess(rangeStr, depthStr) {
   log(`  ${activeDays.length} active days in range`);
 
   if (depthLevel <= 0) {
-    const files = sessionsForDays(days);
-    log(`  Episodes: ${files.length} sessions`);
+    const sessions = sessionsForDays(days);
+    log(`  Episodes: ${sessions.length} sessions`);
     const CONCURRENCY = parseInt(process.env.REPROCESS_CONCURRENCY || "8");
     let ok = 0, fail = 0, skip = 0;
 
-    async function processEpisode(f) {
+    async function processEpisode(s: SessionInfo) {
       try {
-        const entries = parseSession(f);
-        const id = sessionId(entries);
-        if (!id || !hasAssistantMessage(entries)) { skip++; return; }
-        const sessionEntries = entries.filter(e => e.type !== "session");
-        let ctx;
-        try { ctx = buildSessionContext(sessionEntries); }
-        catch (err) { log(`    Context failed ${id.slice(0,8)}: ${err.message?.slice(0,100)}`); fail++; return; }
-        if (!ctx.messages.length) { skip++; return; }
-        const { start, end } = sessionTimestamps(entries);
+        if (!metaHasAssistant(s.path)) { skip++; return; }
+
+        const { start, end } = metaTimestamps(s.path);
         const dateStr = toDateStr(end || start || new Date().toISOString());
-        log(`    ${id.slice(0, 8)} (${dateStr}) started`);
-        const resolved = await resolveModel(null, "dmn");
-        const messages = [
-          ...ctx.messages,
-          userMessage("Write a journal entry for this session.\n\nRespond in plain text. Do not call any tools."),
-        ];
-        const result = await complete(resolved, messages, EPISODE_SYSTEM);
-        const text = getText(result);
-        if (!text || !text.trim()) {
-          log(`    ${id.slice(0, 8)} ✗ empty response (stopReason: ${result.stopReason})`);
-          fail++; return;
+        log(`    ${s.id.slice(0, 8)} (${dateStr}) [${s.platform}] started`);
+
+        let text: string;
+
+        if (s.platform === "cc") {
+          const cwd = extractCwd(s.path);
+          if (!cwd) { log(`    ${s.id.slice(0, 8)} ✗ no cwd`); fail++; return; }
+          text = await claudeResume(s.id, EPISODE_PROMPT, cwd, {
+            appendSystemPrompt: EPISODE_SYSTEM,
+            toolName: "dmn",
+          });
+        } else {
+          const { loadEntriesFromFile, buildSessionContext } = await getPiSessionManager();
+          const entries = loadEntriesFromFile(s.path);
+          const sessionEntries = entries.filter((e: any) => e.type !== "session");
+          let ctx: any;
+          try { ctx = buildSessionContext(sessionEntries); }
+          catch (err: any) { log(`    Context failed ${s.id.slice(0,8)}: ${err.message?.slice(0,100)}`); fail++; return; }
+          if (!ctx.messages.length) { skip++; return; }
+
+          const messages = [...ctx.messages, userMessage(EPISODE_PROMPT)];
+          const result = await complete(messages, EPISODE_SYSTEM, null, "dmn");
+          text = getText(result);
+          if (!text?.trim()) {
+            log(`    ${s.id.slice(0, 8)} ✗ empty response (stopReason: ${result.stopReason})`);
+            fail++; return;
+          }
         }
-        const fm = buildFrontmatter("pi", f, end || start || new Date().toISOString());
+
+        const fm = buildFrontmatter(s.platform === "cc" ? "cc" : "pi", s.path, end || start || new Date().toISOString());
         const dir = join(EPISODES_DIR, dateStr);
         mkdirSync(dir, { recursive: true });
-        const epPath = join(dir, `${id}.md`);
+        const epPath = join(dir, `${s.id}.md`);
         const tmp = epPath + ".tmp";
         writeFileSync(tmp, fm + text, "utf8");
         renameSync(tmp, epPath);
-        log(`    ${id.slice(0, 8)} ✓ ${text.length} chars`);
+        log(`    ${s.id.slice(0, 8)} ✓ ${text.length} chars`);
         ok++;
-      } catch (err) { log(`    Error: ${err.message?.slice(0, 100)}`); fail++; }
+      } catch (err: any) { log(`    Error: ${err.message?.slice(0, 100)}`); fail++; }
     }
 
-    const pool = new Set();
-    for (const f of files) {
+    const pool = new Set<Promise<void>>();
+    for (const s of sessions) {
       if (pool.size >= CONCURRENCY) await Promise.race(pool);
-      const p = processEpisode(f).then(() => pool.delete(p));
+      const p = processEpisode(s).then(() => { pool.delete(p); });
       pool.add(p);
     }
     await Promise.all(pool);
@@ -552,10 +575,10 @@ async function reprocess(rangeStr, depthStr) {
     await Promise.all(activeDays.map(async (d) => {
       try {
         const summary = await recall(d, CACHE_Q_DAY, "opus");
-        if (!summary || summary.startsWith("[recall:")) throw new Error(summary);
-        atomicWrite(join(CACHE_DIR, "days", `${d}.md`), summary);
+        if (!summary || summary.startsWith("[recall:")) throw new Error(summary as string);
+        atomicWrite(join(CACHE_DIR, "days", `${d}.md`), summary as string);
         log(`    ${d} ✓`);
-      } catch (err) { log(`    ${d} ✗ ${err.message?.slice(0, 100)}`); }
+      } catch (err: any) { log(`    ${d} ✗ ${err.message?.slice(0, 100)}`); }
     }));
   }
 
@@ -570,10 +593,10 @@ async function reprocess(rangeStr, depthStr) {
     await Promise.all(uniqueWeeks.map(async (w) => {
       try {
         const summary = await recall(w, CACHE_Q_WEEK, "opus");
-        if (!summary || summary.startsWith("[recall:")) throw new Error(summary);
-        atomicWrite(join(CACHE_DIR, "weeks", `${w}.md`), summary);
+        if (!summary || summary.startsWith("[recall:")) throw new Error(summary as string);
+        atomicWrite(join(CACHE_DIR, "weeks", `${w}.md`), summary as string);
         log(`    ${w} ✓`);
-      } catch (err) { log(`    ${w} ✗ ${err.message?.slice(0, 100)}`); }
+      } catch (err: any) { log(`    ${w} ✗ ${err.message?.slice(0, 100)}`); }
     }));
   }
 
@@ -586,10 +609,10 @@ async function reprocess(rangeStr, depthStr) {
     await Promise.all(months.map(async (m) => {
       try {
         const summary = await recall(m, CACHE_Q_MONTH, "opus");
-        if (!summary || summary.startsWith("[recall:")) throw new Error(summary);
-        atomicWrite(join(CACHE_DIR, "months", `${m}.md`), summary);
+        if (!summary || summary.startsWith("[recall:")) throw new Error(summary as string);
+        atomicWrite(join(CACHE_DIR, "months", `${m}.md`), summary as string);
         log(`    ${m} ✓`);
-      } catch (err) { log(`    ${m} ✗ ${err.message?.slice(0, 100)}`); }
+      } catch (err: any) { log(`    ${m} ✗ ${err.message?.slice(0, 100)}`); }
     }));
   }
 
@@ -601,10 +624,10 @@ async function reprocess(rangeStr, depthStr) {
     for (const q of quarters) {
       try {
         const summary = await recall(q, CACHE_Q_QUARTER, "opus");
-        if (!summary || summary.startsWith("[recall:")) throw new Error(summary);
-        atomicWrite(join(CACHE_DIR, "quarters", `${q}.md`), summary);
+        if (!summary || summary.startsWith("[recall:")) throw new Error(summary as string);
+        atomicWrite(join(CACHE_DIR, "quarters", `${q}.md`), summary as string);
         log(`    ${q} ✓`);
-      } catch (err) { log(`    ${q} ✗ ${err.message?.slice(0, 100)}`); }
+      } catch (err: any) { log(`    ${q} ✗ ${err.message?.slice(0, 100)}`); }
     }
   }
 
@@ -633,14 +656,14 @@ function startFlushWatcher() {
     // Phase 1: Generate episodes (skip cascade — we'll do it ourselves)
     globalThis._skipCascade = true;
     let processed = 0, failed = 0;
-    const dates = new Set();
+    const dates = new Set<string>();
     for (const [filePath] of pending) {
       if (inflight.has(filePath)) continue;
       inflight.add(filePath);
       try {
         const r = await generateEpisode(filePath);
         if (r) { processed++; dates.add(r.dateStr); }
-      } catch (err) { log(`Flush error: ${err.message}`); failed++; }
+      } catch (err: any) { log(`Flush error: ${err.message}`); failed++; }
       finally { inflight.delete(filePath); }
     }
     globalThis._skipCascade = false;
@@ -651,9 +674,9 @@ function startFlushWatcher() {
         log(`  Regenerating day cache: ${dateStr}`);
         const daySummary = await recall(dateStr, CACHE_Q_DAY, "opus");
         if (daySummary && !daySummary.startsWith("[recall:")) {
-          atomicWrite(join(CACHE_DIR, "days", `${dateStr}.md`), daySummary);
+          atomicWrite(join(CACHE_DIR, "days", `${dateStr}.md`), daySummary as string);
         }
-      } catch (err) { log(`  Day cache error: ${err.message?.slice(0, 100)}`); }
+      } catch (err: any) { log(`  Day cache error: ${err.message?.slice(0, 100)}`); }
     }
 
     // Emit summary — /done stops waiting here
@@ -662,25 +685,25 @@ function startFlushWatcher() {
     // Phase 3: Background cascade (week/month/quarter)
     (async () => {
       for (const dateStr of dates) {
-        const weekStr = dateToWeek(dateStr);
-        const monthStr = dateStr.slice(0, 7);
+        const weekStr = dateToWeek(dateStr as string);
+        const monthStr = (dateStr as string).slice(0, 7);
 
         try {
           log(`  [bg] Regenerating week cache: ${weekStr}`);
           const weekSummary = await recall(weekStr, CACHE_Q_WEEK, "opus");
           if (weekSummary && !weekSummary.startsWith("[recall:")) {
-            atomicWrite(join(CACHE_DIR, "weeks", `${weekStr}.md`), weekSummary);
+            atomicWrite(join(CACHE_DIR, "weeks", `${weekStr}.md`), weekSummary as string);
           }
-        } catch (err) { log(`  [bg] Week cache error: ${err.message?.slice(0, 100)}`); }
+        } catch (err: any) { log(`  [bg] Week cache error: ${err.message?.slice(0, 100)}`); }
 
         if (lastProcessedDate && lastProcessedDate !== dateStr) {
           try {
             log(`  [bg] Regenerating month cache: ${monthStr}`);
             const monthSummary = await recall(monthStr, CACHE_Q_MONTH, "opus");
             if (monthSummary && !monthSummary.startsWith("[recall:")) {
-              atomicWrite(join(CACHE_DIR, "months", `${monthStr}.md`), monthSummary);
+              atomicWrite(join(CACHE_DIR, "months", `${monthStr}.md`), monthSummary as string);
             }
-          } catch (err) { log(`  [bg] Month cache error: ${err.message?.slice(0, 100)}`); }
+          } catch (err: any) { log(`  [bg] Month cache error: ${err.message?.slice(0, 100)}`); }
         }
 
         if (lastProcessedWeek && lastProcessedWeek !== weekStr) {
@@ -689,12 +712,12 @@ function startFlushWatcher() {
             log(`  [bg] Regenerating quarter cache: ${quarterStr}`);
             const quarterSummary = await recall(quarterStr, CACHE_Q_QUARTER, "opus");
             if (quarterSummary && !quarterSummary.startsWith("[recall:")) {
-              atomicWrite(join(CACHE_DIR, "quarters", `${quarterStr}.md`), quarterSummary);
+              atomicWrite(join(CACHE_DIR, "quarters", `${quarterStr}.md`), quarterSummary as string);
             }
-          } catch (err) { log(`  [bg] Quarter cache error: ${err.message?.slice(0, 100)}`); }
+          } catch (err: any) { log(`  [bg] Quarter cache error: ${err.message?.slice(0, 100)}`); }
         }
 
-        lastProcessedDate = dateStr;
+        lastProcessedDate = dateStr as string;
         lastProcessedWeek = weekStr;
         lastProcessedMonth = monthStr;
       }
@@ -707,10 +730,10 @@ function scheduleSweep() {
   const now = new Date();
   const midnight = new Date(now);
   midnight.setHours(24, 0, 0, 0);
-  const ms = midnight - now;
+  const ms = (midnight as any) - (now as any);
   log(`Next sweep in ${Math.round(ms / 60000)}min`);
   setTimeout(async () => {
-    try { await sweep(); } catch (err) { log(`Sweep failed: ${err.message}`); }
+    try { await sweep(); } catch (err: any) { log(`Sweep failed: ${err.message}`); }
     scheduleSweep();
   }, ms);
 }
@@ -721,14 +744,11 @@ function scheduleSweep() {
 
 async function addFrontmatter() {
   log("Building session index...");
-  const sessionIndex = new Map();
-  const files = allSessions();
-  for (const f of files) {
-    const entries = parseSession(f);
-    const id = sessionId(entries);
-    if (!id) continue;
-    const { start, end } = sessionTimestamps(entries);
-    sessionIndex.set(id, { path: f, start, end });
+  const sessionIndex = new Map<string, { path: string; start: string | null; end: string | null }>();
+  const sessions = metaAllSessions();
+  for (const s of sessions) {
+    const { start, end } = metaTimestamps(s.path);
+    sessionIndex.set(s.id, { path: s.path, start, end });
   }
   log(`  ${sessionIndex.size} sessions indexed`);
 
@@ -752,7 +772,8 @@ async function addFrontmatter() {
       const ts = session ? (session.end || session.start || `${dateDir}T00:00:00Z`) : `${dateDir}T00:00:00Z`;
       if (!session) notFound++;
 
-      const fm = buildFrontmatter("pi", sourcePath, ts);
+      const origin = sourcePath.includes(".claude/projects") ? "cc" : "pi";
+      const fm = buildFrontmatter(origin, sourcePath, ts);
       atomicWrite(epPath, fm + content);
       updated++;
     }
