@@ -22,7 +22,6 @@ import { realpathSync } from "fs";
 // --- Types ---
 
 interface SnorrioConfig {
-  backend?: "pi" | "claude" | null;
   provider?: string | null;
   model?: string;
   timezone?: string | null;
@@ -88,10 +87,6 @@ function hasClaude(): boolean {
 
 export function getBackend(): Backend {
   if (_detectedBackend) return _detectedBackend;
-
-  const config = loadConfig();
-  if (config.backend === "pi" && hasPi()) { _detectedBackend = "pi"; return "pi"; }
-  if (config.backend === "claude" && hasClaude()) { _detectedBackend = "claude"; return "claude"; }
 
   // Auto-detect: prefer pi when both available
   if (hasPi()) { _detectedBackend = "pi"; return "pi"; }
@@ -570,7 +565,6 @@ export function ensureConfig(): void {
     readFileSync(CONFIG_PATH);
   } catch {
     const defaultConfig = {
-      backend: null,
       provider: null,
       model: "opus",
       timezone: null,

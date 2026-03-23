@@ -1,47 +1,37 @@
-#!/usr/bin/env bash
-# snorrio install/update
-# curl -fsSL https://snorr.io/install | bash
-set -euo pipefail
+#!/bin/bash
+set -e
 
-# Colors (disabled if not a terminal)
-if [ -t 1 ]; then
-  dim='\033[2m'
-  reset='\033[0m'
-  bold='\033[1m'
-else
-  dim='' reset='' bold=''
+HAS_PI=false
+HAS_CC=false
+command -v pi &>/dev/null && HAS_PI=true
+command -v claude &>/dev/null && HAS_CC=true
+
+if ! $HAS_PI && ! $HAS_CC; then
+  echo "Neither pi nor Claude Code found. Install one first."
+  exit 1
 fi
 
-step() { printf "${dim}%s${reset}\n" "$1"; }
-done_msg() { printf "${bold}%s${reset}\n" "$1"; }
-
-# --- Node.js ---
-if ! command -v node &>/dev/null; then
-  step "installing node..."
-  if command -v brew &>/dev/null; then
-    brew install node
-  elif command -v apt-get &>/dev/null; then
-    curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -
-    sudo apt-get install -y nodejs
-  else
-    echo "error: node.js not found. install it from https://nodejs.org" >&2
-    exit 1
-  fi
+# Install on available platforms
+if $HAS_PI; then
+  echo "Installing on pi..."
+  pi install git:github.com/lrhodin/snorrio
 fi
 
-# --- pi ---
-step "installing pi..."
-npm install -g @mariozechner/pi-coding-agent
-
-# --- snorrio ---
-SNORRIO_SRC="git:github.com/lrhodin/snorrio"
-if pi list 2>/dev/null | grep -q "github.com/lrhodin/snorrio"; then
-  step "updating snorrio..."
-  pi update "$SNORRIO_SRC"
-else
-  step "installing snorrio..."
-  pi install "$SNORRIO_SRC"
+if $HAS_CC; then
+  echo "Installing on Claude Code..."
+  claude plugin marketplace add https://github.com/lrhodin/snorrio 2>/dev/null || true
+  claude plugin install snorrio@snorrio 2>/dev/null || true
 fi
 
-echo
-done_msg "ready. type: pi"
+# Symlink canonical location — prefer pi if both present
+mkdir -p ~/.snorrio
+if $HAS_PI && [ -d ~/.pi/agent/git/github.com/lrhodin/snorrio ]; then
+  ln -sfn ~/.pi/agent/git/github.com/lrhodin/snorrio ~/.snorrio/src
+  echo "Primary: pi ($(readlink ~/.snorrio/src))"
+elif $HAS_CC && [ -d ~/.claude/plugins/marketplaces/snorrio ]; then
+  ln -sfn ~/.claude/plugins/marketplaces/snorrio ~/.snorrio/src
+  echo "Primary: Claude Code ($(readlink ~/.snorrio/src))"
+fi
+
+echo ""
+echo "Installed. Open pi or claude and mention snorrio to finish setup."

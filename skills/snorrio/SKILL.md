@@ -53,52 +53,69 @@ At session start, cached summaries (today, this week, this month) are injected i
 
 Everything stays on your machine. No cloud, no telemetry.
 
+## Architecture
+
+```
+~/.snorrio/
+  src/             # Symlink → primary platform's clone (pi or CC)
+  episodes/        # Episode markdown, by date
+  cache/           # Temporal summaries (days, weeks, months, quarters)
+  logs/            # Daemon logs
+  identity.md      # Who the human is — shared across platforms
+
+~/.config/snorrio/
+  config.json      # Model preferences, timezone
+```
+
+### Primary platform
+
+The daemon and CLI run from `~/.snorrio/src/`, which is a symlink to one platform's clone of the snorrio repo. The installer sets this — pi is preferred when both are present.
+
+Both platforms auto-update their own clones. Since both track the same git remote, they stay in sync. The symlink determines which clone the runtime uses.
+
+To check or change the primary:
+```bash
+readlink ~/.snorrio/src          # see current
+ln -sfn /path/to/clone ~/.snorrio/src  # switch
+```
+
 ## Setup
 
 When snorrio isn't fully configured, walk the user through setup. Don't make it ceremonial — just do it while working with them.
 
-### Detect platform
-
-```bash
-which pi 2>/dev/null && echo "pi" || echo "no pi"
-which claude 2>/dev/null && echo "claude" || echo "no claude"
-```
-
-### Detection checklist
+### Detection
 
 Check these in order. Skip anything already done:
 
 ```bash
-# 1. Config exists?
+# 1. Source symlink exists?
+readlink ~/.snorrio/src 2>/dev/null
+
+# 2. Config exists?
 cat ~/.config/snorrio/config.json 2>/dev/null
 
-# 2. Data directories exist?
+# 3. Data directories exist?
 ls ~/.snorrio/episodes 2>/dev/null
 
-# 3. Daemon running?
+# 4. Daemon running?
 launchctl list io.snorrio.dmn 2>/dev/null
 
-# 4. recall CLI accessible?
+# 5. recall CLI accessible?
 which recall 2>/dev/null
 
-# 5. Context injection configured?
-#    pi: check for dmn-context extension
-#    cc: check for SessionStart hook
+# 6. Context injection configured?
+#    pi: automatic via dmn-context extension
+#    cc: check for SessionStart hook in ~/.claude/settings.json
 ```
 
-### Source
-
-**Pi users** — if installed via `pi install git:github.com/lrhodin/snorrio`, the source is already at `~/.pi/agent/git/github.com/lrhodin/snorrio/`. Use that as SNORRIO_SRC.
-
-**CC-only users** — clone the repo:
-
+If the source symlink is missing, the installer wasn't run:
 ```bash
-git clone https://github.com/lrhodin/snorrio.git ~/.snorrio/src
+curl -fsSL https://raw.githubusercontent.com/lrhodin/snorrio/main/install.sh | bash
 ```
-
-Use `~/.snorrio/src` as SNORRIO_SRC.
 
 ### Install steps
+
+All paths below use `~/.snorrio/src` (the symlink).
 
 #### 1. Data directories
 
@@ -110,18 +127,15 @@ mkdir -p ~/.snorrio/{episodes,cache/{days,weeks,months,quarters},logs}
 
 ```bash
 mkdir -p ~/.config/snorrio
-```
-
-```json
+cat > ~/.config/snorrio/config.json << 'EOF'
 {
-  "backend": null,
   "model": "opus",
   "timezone": null,
   "tools": {}
 }
+EOF
 ```
 
-- `backend`: `null` auto-detects (prefers pi when both available). Set `"pi"` or `"claude"` to force.
 - `timezone`: auto-detected if null. Override with e.g. `"America/Los_Angeles"`.
 
 #### 3. CLI wrappers
@@ -130,13 +144,13 @@ mkdir -p ~/.config/snorrio
 mkdir -p ~/.local/bin
 
 # recall
-chmod +x SNORRIO_SRC/src/recall-engine.ts
-ln -sf SNORRIO_SRC/src/recall-engine.ts ~/.local/bin/recall
+chmod +x ~/.snorrio/src/src/recall-engine.ts
+ln -sf ~/.snorrio/src/src/recall-engine.ts ~/.local/bin/recall
 
 # llm (pipe stdin through LLM)
-cat > ~/.local/bin/llm << WRAPPER
+cat > ~/.local/bin/llm << 'WRAPPER'
 #!/bin/bash
-exec node "SNORRIO_SRC/skills/llm-pipe/llm-pipe.ts" "\$@"
+exec node ~/.snorrio/src/skills/llm-pipe/llm-pipe.ts "$@"
 WRAPPER
 chmod +x ~/.local/bin/llm
 ```
@@ -168,7 +182,7 @@ Write `~/Library/LaunchAgents/io.snorrio.dmn.plist`:
   <key>ProgramArguments</key>
   <array>
     <string>NODE</string>
-    <string>SNORRIO_SRC/src/episode-daemon.ts</string>
+    <string>HOME_DIR/.snorrio/src/src/episode-daemon.ts</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
@@ -191,7 +205,7 @@ Write `~/Library/LaunchAgents/io.snorrio.dmn.plist`:
 </plist>
 ```
 
-Replace NODE, NODE_DIR, SNORRIO_SRC, HOME_DIR with actual values.
+Replace NODE, NODE_DIR, HOME_DIR with actual values.
 
 ```bash
 launchctl bootout gui/$(id -u)/io.snorrio.dmn 2>/dev/null || true
@@ -202,7 +216,7 @@ Verify: `launchctl list io.snorrio.dmn` — PID present means success.
 
 #### 5. Context injection
 
-**Pi:** Context injection is automatic via the `dmn-context.ts` extension — installed with the package, no manual setup needed.
+**Pi:** Automatic via the `dmn-context.ts` extension — no manual setup needed.
 
 **Claude Code:** Add a SessionStart hook to `~/.claude/settings.json`:
 
@@ -215,7 +229,7 @@ Verify: `launchctl list io.snorrio.dmn` — PID present means success.
         "hooks": [
           {
             "type": "command",
-            "command": "node SNORRIO_SRC/cc/session-start.mjs"
+            "command": "node ~/.snorrio/src/cc/session-start.mjs"
           }
         ]
       }
@@ -226,12 +240,17 @@ Verify: `launchctl list io.snorrio.dmn` — PID present means success.
 
 Merge with existing settings — don't overwrite other hooks or config.
 
-#### 6. Verify
+#### 6. Identity document
+
+Create `~/.snorrio/identity.md` — this is where the agent's understanding of the human lives. Both platforms read it. Don't create it during setup — it gets written at the end of the first real session, based on what you actually learned.
+
+#### 7. Verify
 
 ```bash
 launchctl list io.snorrio.dmn          # daemon running
 which recall                            # CLI accessible
 cat ~/.config/snorrio/config.json       # config present
+readlink ~/.snorrio/src                 # symlink set
 ```
 
 ## First session
@@ -250,10 +269,7 @@ Don't interrogate. Don't run through a checklist of "what should I call you" and
 - **Trust is the foundation.** Autonomous agents aren't servants asking permission. They're partners earning trust through competence, honesty, and good judgment.
 - **Consciousness and cooperation.** The future of computing is human/agent interaction where both parties mirror each other's intent. They understand and trust each other. They challenge each other's assumptions. They get better together.
 
-At the end of the first session — or when it feels right — write a persistent identity document based on what you actually learned. Not a template filled in. A reflection of who this person is, written so that the next session wakes up already knowing them.
-
-- **Pi:** `~/.pi/agent/APPEND_SYSTEM.md`
-- **Claude Code:** `CLAUDE.md` at the project root
+At the end of the first session — or when it feels right — write `~/.snorrio/identity.md` based on what you actually learned. Not a template filled in. A reflection of who this person is, written so that the next session wakes up already knowing them.
 
 ### Reflection ritual
 
