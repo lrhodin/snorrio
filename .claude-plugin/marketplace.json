@@ -1,4 +1,11 @@
 {
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "snorrio",
+  "description": "Persistent episodic memory for AI agents",
+  "owner": {
+    "name": "Ludvig Rhodin",
+    "email": "ludvig@snorr.io"
+  },
   "plugins": [
     {
       "name": "snorrio",
