@@ -1,0 +1,161 @@
+#!/usr/bin/env node
+// snorrio CLI — administrative commands for snorrio.
+//
+// Usage:
+//   snorrio flush          Flush pending sessions through the daemon
+//   snorrio status         Show daemon and system status
+//   snorrio update         Pull latest and restart daemon
+
+import { existsSync, readFileSync, writeFileSync, statSync, openSync, readSync, closeSync } from "fs";
+import { join } from "path";
+import { execSync } from "child_process";
+
+const HOME = process.env.HOME;
+const SNORRIO_HOME = process.env.SNORRIO_HOME || join(HOME, "snorrio");
+const LOG_DIR = join(SNORRIO_HOME, "logs");
+const FLUSH_TRIGGER = join(SNORRIO_HOME, "flush");
+
+const cmd = process.argv[2];
+
+if (!cmd || cmd === "help" || cmd === "--help") {
+  console.log(`snorrio — memory system for AI agents
+
+Commands:
+  flush     Flush pending sessions through the daemon
+  status    Show daemon and system status
+  update    Pull latest and restart daemon`);
+  process.exit(0);
+}
+
+if (cmd === "flush") {
+  writeFileSync(FLUSH_TRIGGER, new Date().toISOString());
+
+  const today = new Date().toISOString().slice(0, 10);
+  const logFile = join(LOG_DIR, `${today}.log`);
+
+  let logOffset = 0;
+  try { logOffset = statSync(logFile).size; } catch {}
+
+  const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+  let spinIdx = 0;
+  const started = Date.now();
+
+  let total = 0;
+  let episodesDone = 0;
+  let phase = "waiting";
+
+  const poll = setInterval(() => {
+    spinIdx = (spinIdx + 1) % SPINNER.length;
+    const s = SPINNER[spinIdx];
+
+    if (Date.now() - started > 300_000) {
+      console.log("\nFlush timed out (5m)");
+      process.exit(1);
+    }
+
+    let stat;
+    try { stat = statSync(logFile); } catch { return; }
+    if (stat.size <= logOffset) {
+      process.stdout.write(`\r${s} ${phase === "waiting" ? "Waiting for daemon..." : `Episodes: ${episodesDone}/${total}`}`);
+      return;
+    }
+
+    const fd = openSync(logFile, "r");
+    const buf = Buffer.alloc(stat.size - logOffset);
+    readSync(fd, buf, 0, buf.length, logOffset);
+    closeSync(fd);
+    logOffset = stat.size;
+
+    const text = buf.toString("utf8");
+
+    if (text.includes("Flush: 0 sessions to process")) {
+      console.log("\r✓ All sessions up to date");
+      clearInterval(poll);
+      process.exit(0);
+    }
+
+    const pendingMatch = text.match(/Flush: (\d+) pending/);
+    if (pendingMatch) {
+      total = Number(pendingMatch[1]);
+      phase = "episodes";
+    }
+
+    const doneMatches = text.match(/  Done: /g);
+    if (doneMatches) episodesDone += doneMatches.length;
+
+    const summary = text.match(/Flush: (\d+) processed, (\d+) skipped, (\d+) failed/);
+    if (summary) {
+      const processed = Number(summary[1]);
+      const failed = Number(summary[3]);
+      let msg = `\r✓ ${processed} episode${processed !== 1 ? "s" : ""}`;
+      if (failed > 0) msg += ` (${failed} failed)`;
+      msg += " — caches updating in background";
+      console.log(msg);
+      clearInterval(poll);
+      process.exit(failed > 0 ? 1 : 0);
+    }
+
+    process.stdout.write(`\r${s} Episodes: ${episodesDone}/${total}`);
+  }, 200);
+
+} else if (cmd === "status") {
+  // Daemon
+  let daemonPid = null;
+  try {
+    const out = execSync("launchctl list io.snorrio.dmn 2>/dev/null", { encoding: "utf8" });
+    const pidMatch = out.match(/"PID"\s*=\s*(\d+)/);
+    daemonPid = pidMatch ? pidMatch[1] : null;
+  } catch {}
+  console.log(`Daemon:    ${daemonPid ? `running (PID ${daemonPid})` : "not running"}`);
+
+  // Episodes
+  const episodesDir = join(SNORRIO_HOME, "episodes");
+  const today = new Date().toISOString().slice(0, 10);
+  let todayCount = 0;
+  let totalDays = 0;
+  try {
+    const { readdirSync } = await import("fs");
+    const days = readdirSync(episodesDir);
+    totalDays = days.length;
+    const todayDir = join(episodesDir, today);
+    if (existsSync(todayDir)) {
+      todayCount = readdirSync(todayDir).filter(f => f.endsWith(".md")).length;
+    }
+  } catch {}
+  console.log(`Episodes:  ${todayCount} today, ${totalDays} days total`);
+
+  // Identity
+  const identityPath = join(SNORRIO_HOME, "identity.md");
+  console.log(`Identity:  ${existsSync(identityPath) ? "present" : "missing"}`);
+
+  // Config
+  const configPath = join(HOME, ".config/snorrio/config.json");
+  console.log(`Config:    ${existsSync(configPath) ? configPath : "missing"}`);
+
+  // Git status
+  try {
+    const branch = execSync("git rev-parse --abbrev-ref HEAD", { cwd: SNORRIO_HOME, encoding: "utf8" }).trim();
+    const hash = execSync("git rev-parse --short HEAD", { cwd: SNORRIO_HOME, encoding: "utf8" }).trim();
+    console.log(`Version:   ${branch}@${hash}`);
+  } catch {}
+
+} else if (cmd === "update") {
+  try {
+    console.log("Pulling latest...");
+    execSync("git pull --ff-only", { cwd: SNORRIO_HOME, stdio: "inherit" });
+
+    console.log("Restarting daemon...");
+    const uid = execSync("id -u", { encoding: "utf8" }).trim();
+    try { execSync(`launchctl bootout gui/${uid}/io.snorrio.dmn`, { stdio: "pipe" }); } catch {}
+    execSync(`launchctl bootstrap gui/${uid} ~/Library/LaunchAgents/io.snorrio.dmn.plist`, { stdio: "inherit" });
+
+    console.log("✓ Updated and restarted");
+  } catch (err) {
+    console.error(`Update failed: ${err.message}`);
+    process.exit(1);
+  }
+
+} else {
+  console.error(`Unknown command: ${cmd}\nRun 'snorrio help' for usage.`);
+  process.exit(1);
+}

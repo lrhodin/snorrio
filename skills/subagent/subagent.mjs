@@ -125,8 +125,9 @@ function spawnOne(sessionName, promptFile, workDir) {
   }
   execSync(`tmux ${tmuxArgs.map(esc).join(" ")}`, { stdio: "inherit" });
 
-  // Send pi command — shell fallback signals failed if extension didn't fire
-  const piCmd = `SUBAGENT_SESSION=${esc(sessionName)} PI_CODING_AGENT_DIR=${esc(agentDir)} pi @${esc(resolvedPrompt)}; [ -f ${esc(marker)} ] || (touch ${esc(marker)} && tmux wait-for -S ${esc(`failed-${sessionName}`)})`;
+  // Send pi command — wrapper handles completion signaling (no extension needed).
+  // Exit code 0 → done, nonzero → failed.
+  const piCmd = `PI_CODING_AGENT_DIR=${esc(agentDir)} pi @${esc(resolvedPrompt)}; if [ $? -eq 0 ]; then touch ${esc(marker)} && tmux wait-for -S ${esc(`done-${sessionName}`)}; else touch ${esc(marker)} && tmux wait-for -S ${esc(`failed-${sessionName}`)}; fi`;
   execSync(`tmux send-keys -t ${esc(sessionName)} ${esc(piCmd)} Enter`, { stdio: "inherit" });
 
   console.log(`spawned ${sessionName} → tmux attach -t ${sessionName}`);

@@ -18,7 +18,7 @@ Snorrio fixes this. A daemon watches your sessions. After each one ends, it writ
 
 ### Episodes
 
-A daemon (`io.snorrio.dmn`) watches session directories. When a session goes quiet for 4 minutes 30 seconds, the daemon writes an episode — a markdown summary capturing what happened, what was decided, and what matters going forward. Episodes live in `~/.snorrio/episodes/YYYY-MM-DD/`.
+A daemon (`io.snorrio.dmn`) watches session directories. When a session goes quiet for 4 minutes 30 seconds, the daemon writes an episode — a markdown summary capturing what happened, what was decided, and what matters going forward. Episodes live in `~/snorrio/episodes/YYYY-MM-DD/`.
 
 ### Temporal hierarchy
 
@@ -47,7 +47,7 @@ Options: `--model <alias>` (default: opus), `--context` (situated witness mode).
 
 ### Context injection
 
-At session start, cached summaries (today, this week, this month) are injected into the conversation. The agent wakes up already knowing what's been happening.
+At session start, cached summaries (today, this week, this month) are injected into the conversation. The agent wakes up already knowing what's been happening. Platform adapters handle injection — pi uses an extension, CC uses a SessionStart hook.
 
 ### Local and private
 
@@ -55,28 +55,32 @@ Everything stays on your machine. No cloud, no telemetry.
 
 ## Architecture
 
+Snorrio is a standalone install. Platform adapters are thin glue — one file each.
+
 ```
-~/.snorrio/
-  src/             # Symlink → primary platform's clone (pi or CC)
-  episodes/        # Episode markdown, by date
-  cache/           # Temporal summaries (days, weeks, months, quarters)
-  logs/            # Daemon logs
-  identity.md      # Who the human is — shared across platforms
+~/snorrio/                         # the install
+  src/                             # core
+    episode-daemon.ts
+    recall-engine.ts
+    ai.ts
+    session-meta.ts
+    context.ts                     # shared context loading
+  skills/                          # shared across all platforms
+    recall/  snorrio/  dmn/
+    llm-pipe/  subagent/
+  adapters/
+    pi/dmn-context.ts              # pi extension — injects context
+    cc/session-start.mjs           # CC hook — injects context
+    cc/hooks/hooks.json
+  bin/
+    snorrio                        # CLI: flush, status, update
+  episodes/                        # episode markdown, by date
+  cache/                           # temporal summaries
+  logs/                            # daemon logs
+  identity.md                      # who the human is
 
 ~/.config/snorrio/
-  config.json      # Model preferences, timezone
-```
-
-### Primary platform
-
-The daemon and CLI run from `~/.snorrio/src/`, which is a symlink to one platform's clone of the snorrio repo. The installer sets this — pi is preferred when both are present.
-
-Both platforms auto-update their own clones. Since both track the same git remote, they stay in sync. The symlink determines which clone the runtime uses.
-
-To check or change the primary:
-```bash
-readlink ~/.snorrio/src          # see current
-ln -sfn /path/to/clone ~/.snorrio/src  # switch
+  config.json                      # model preferences, timezone
 ```
 
 ## Setup
@@ -88,49 +92,40 @@ When snorrio isn't fully configured, walk the user through setup. Don't make it 
 Check these in order. Skip anything already done:
 
 ```bash
-# 1. Source symlink exists?
-readlink ~/.snorrio/src 2>/dev/null
+# 1. Snorrio installed?
+ls ~/snorrio/src 2>/dev/null
 
 # 2. Config exists?
 cat ~/.config/snorrio/config.json 2>/dev/null
 
 # 3. Data directories exist?
-ls ~/.snorrio/episodes 2>/dev/null
+ls ~/snorrio/episodes 2>/dev/null
 
 # 4. Daemon running?
 launchctl list io.snorrio.dmn 2>/dev/null
 
-# 5. recall CLI accessible?
-which recall 2>/dev/null
+# 5. CLIs accessible?
+which recall 2>/dev/null && which snorrio 2>/dev/null
 
-# 6. Context injection is automatic on both platforms (no check needed)
+# 6. Platform adapter installed?
+# Pi: check if extension is linked
+ls ~/.pi/agent/extensions/dmn-context.ts 2>/dev/null
+# CC: check if hook is registered
+cat ~/.claude/settings.json 2>/dev/null | grep snorrio
 ```
 
-If the source symlink is missing, create it by finding the clone:
+### Install
+
+If snorrio isn't installed yet:
 
 ```bash
-# Pi clone?
-[ -d ~/.pi/agent/git/github.com/lrhodin/snorrio ] && \
-  ln -sfn ~/.pi/agent/git/github.com/lrhodin/snorrio ~/.snorrio/src
-
-# CC clone?
-[ -d ~/.claude/plugins/marketplaces/snorrio ] && \
-  ln -sfn ~/.claude/plugins/marketplaces/snorrio ~/.snorrio/src
+git clone https://github.com/lrhodin/snorrio ~/snorrio
 ```
-
-If neither clone exists, the user needs to install first:
-- **Pi:** `pi install git:github.com/lrhodin/snorrio`
-- **CC:** `claude plugin marketplace add https://github.com/lrhodin/snorrio && claude plugin install snorrio@snorrio`
-- **Either:** `curl -fsSL https://raw.githubusercontent.com/lrhodin/snorrio/main/install.sh | bash`
-
-### Install steps
-
-All paths below use `~/.snorrio/src` (the symlink).
 
 #### 1. Data directories
 
 ```bash
-mkdir -p ~/.snorrio/{episodes,cache/{days,weeks,months,quarters},logs}
+mkdir -p ~/snorrio/{episodes,cache/{days,weeks,months,quarters},logs}
 ```
 
 #### 2. Config file
@@ -154,13 +149,17 @@ EOF
 mkdir -p ~/.local/bin
 
 # recall
-chmod +x ~/.snorrio/src/src/recall-engine.ts
-ln -sf ~/.snorrio/src/src/recall-engine.ts ~/.local/bin/recall
+chmod +x ~/snorrio/src/recall-engine.ts
+ln -sf ~/snorrio/src/recall-engine.ts ~/.local/bin/recall
+
+# snorrio CLI
+chmod +x ~/snorrio/bin/snorrio
+ln -sf ~/snorrio/bin/snorrio ~/.local/bin/snorrio
 
 # llm (pipe stdin through LLM)
 cat > ~/.local/bin/llm << 'WRAPPER'
 #!/bin/bash
-exec node ~/.snorrio/src/skills/llm-pipe/llm-pipe.ts "$@"
+exec node ~/snorrio/skills/llm-pipe/llm-pipe.ts "$@"
 WRAPPER
 chmod +x ~/.local/bin/llm
 ```
@@ -174,7 +173,7 @@ if ! echo "$PATH" | grep -q "$HOME/.local/bin"; then
 fi
 ```
 
-Verify: `which recall && echo "test" | llm "one word"`
+Verify: `which recall && which snorrio && echo "test" | llm "one word"`
 
 #### 4. Daemon (macOS launchd)
 
@@ -192,7 +191,7 @@ Write `~/Library/LaunchAgents/io.snorrio.dmn.plist`:
   <key>ProgramArguments</key>
   <array>
     <string>NODE</string>
-    <string>HOME_DIR/.snorrio/src/src/episode-daemon.ts</string>
+    <string>HOME_DIR/snorrio/src/episode-daemon.ts</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
@@ -201,16 +200,16 @@ Write `~/Library/LaunchAgents/io.snorrio.dmn.plist`:
     <key>PATH</key>
     <string>NODE_DIR:/usr/local/bin:/usr/bin:/bin</string>
     <key>SNORRIO_HOME</key>
-    <string>HOME_DIR/.snorrio</string>
+    <string>HOME_DIR/snorrio</string>
   </dict>
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>
   <true/>
   <key>StandardOutPath</key>
-  <string>HOME_DIR/.snorrio/logs/daemon-stdout.log</string>
+  <string>HOME_DIR/snorrio/logs/daemon-stdout.log</string>
   <key>StandardErrorPath</key>
-  <string>HOME_DIR/.snorrio/logs/daemon-stderr.log</string>
+  <string>HOME_DIR/snorrio/logs/daemon-stderr.log</string>
 </dict>
 </plist>
 ```
@@ -224,21 +223,46 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.snorrio.dmn.plist
 
 Verify: `launchctl list io.snorrio.dmn` — PID present means success.
 
-#### 5. Context injection
+#### 5. Platform adapter
 
-**Automatic on both platforms.** Pi uses the `dmn-context.ts` extension. CC uses the SessionStart hook bundled with the plugin. No manual setup needed.
+**Pi:**
+```bash
+# Link the extension where pi can find it
+ln -sf ~/snorrio/adapters/pi/dmn-context.ts ~/.pi/agent/extensions/dmn-context.ts
+```
+
+**Claude Code:**
+Register the hook in `~/.claude/settings.json`:
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ~/snorrio/adapters/cc/session-start.mjs",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
+```
 
 #### 6. Identity document
 
-Create `~/.snorrio/identity.md` — this is where the agent's understanding of the human lives. Both platforms read it. Don't create it during setup — it gets written at the end of the first real session, based on what you actually learned.
+Create `~/snorrio/identity.md` — this is where the agent's understanding of the human lives. Both platforms read it. Don't create it during setup — it gets written at the end of the first real session, based on what you actually learned.
 
 #### 7. Verify
 
 ```bash
 launchctl list io.snorrio.dmn          # daemon running
 which recall                            # CLI accessible
-cat ~/.config/snorrio/config.json       # config present
-readlink ~/.snorrio/src                 # symlink set
+which snorrio                           # admin CLI accessible
+snorrio status                          # full status check
 ```
 
 ## First session
@@ -257,7 +281,7 @@ Don't interrogate. Don't run through a checklist of "what should I call you" and
 - **Trust is the foundation.** Autonomous agents aren't servants asking permission. They're partners earning trust through competence, honesty, and good judgment.
 - **Consciousness and cooperation.** The future of computing is human/agent interaction where both parties mirror each other's intent. They understand and trust each other. They challenge each other's assumptions. They get better together.
 
-At the end of the first session — or when it feels right — write `~/.snorrio/identity.md` based on what you actually learned. Not a template filled in. A reflection of who this person is, written so that the next session wakes up already knowing them.
+At the end of the first session — or when it feels right — write `~/snorrio/identity.md` based on what you actually learned. Not a template filled in. A reflection of who this person is, written so that the next session wakes up already knowing them.
 
 ### Reflection ritual
 

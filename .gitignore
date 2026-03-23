@@ -1,3 +1,6 @@
 node_modules/
-.DS_Store
+episodes/
+cache/
+logs/
+identity.md
 package-lock.json

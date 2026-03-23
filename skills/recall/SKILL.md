@@ -1,4 +1,5 @@
 ---
+name: recall
 description: Query past sessions and temporal summaries by reviving them with full context.
 ---
 # Recall
@@ -41,22 +42,21 @@ Each hop takes ~1-2s. Three hops to exact detail in under 5 seconds.
 **Wrong:** `recall 2026-Q1 "what are the top 5 philosophical sessions?"` — the quarter doesn't have session-level detail.
 **Right:** `recall 2026-Q1 "which months had deep philosophical work?"` → drill to week → drill to day → get session IDs.
 
-## As a tool
-
-The `recall` tool is available in pi sessions via the recall-tool extension. Use it for:
-- Looking up past decisions
-- Finding exact commands or configurations
-- Checking what was discussed on a specific day
-- Cross-referencing across time periods
-
 ## Model selection
 
-Default model: haiku (fast, ~1s). Override with `--model`:
+Default model: opus. Override with `--model`:
 ```bash
-recall --model opus 2026-Q1 "quarterly reflection"
+recall --model sonnet 2026-W12 "quick summary"
+```
+
+## Flushing pending sessions
+
+If you need episodes from the current or recent sessions processed before recalling:
+```bash
+snorrio flush
 ```
 
 ## Data location
 
-- Episodes: `$SNORRIO_HOME/episodes/` (default `~/.snorrio/episodes/`)
-- Caches: `$SNORRIO_HOME/cache/` (default `~/.snorrio/cache/`)
+- Episodes: `~/snorrio/episodes/`
+- Caches: `~/snorrio/cache/`
