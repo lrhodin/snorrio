@@ -1,0 +1,15 @@
+{
+  "plugins": [
+    {
+      "name": "snorrio",
+      "description": "Persistent episodic memory for AI agents. Recall past sessions, days, weeks, months, and quarters. Sessions become episodes, episodes become narratives, narratives become context.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Ludvig Rhodin"
+      },
+      "source": "./cc",
+      "category": "productivity",
+      "homepage": "https://snorr.io"
+    }
+  ]
+}
