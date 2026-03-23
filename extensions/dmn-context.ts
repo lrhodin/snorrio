@@ -66,15 +66,15 @@ export default function (pi: ExtensionAPI) {
     return { today, yesterday, week, month, quarter };
   }
 
-  function needsOnboarding(): boolean {
-    if (!fs.existsSync(IDENTITY_PATH)) return true;
-    if (!fs.existsSync(path.join(HOME, ".config/snorrio/config.json"))) return true;
-    if (!fs.existsSync(path.join(SNORRIO_HOME, "episodes"))) return true;
-    return false;
+  function isInfrastructureConfigured(): boolean {
+    return (
+      fs.existsSync(path.join(HOME, ".config/snorrio/config.json")) &&
+      fs.existsSync(path.join(SNORRIO_HOME, "episodes"))
+    );
   }
 
   pi.on("before_agent_start", async (event) => {
-    if (needsOnboarding()) {
+    if (!isInfrastructureConfigured()) {
       const onboarding = `
 
 ## Snorrio: first session
@@ -105,11 +105,17 @@ At the end of the session — when it feels right — draft \`~/.snorrio/identit
     }
 
     // --- Identity + temporal context ---
+    // Always inject temporal context when infrastructure exists.
+    // Identity is additive — missing identity.md doesn't suppress memory.
 
     const sections: string[] = [];
 
     const identity = readFile(IDENTITY_PATH);
-    if (identity) sections.push(identity);
+    if (identity) {
+      sections.push(identity);
+    } else {
+      sections.push(`*Note: ~/.snorrio/identity.md does not exist yet. Write it when the session feels complete.*`);
+    }
 
     const refs = getDateRefs();
     const temporal: string[] = [];
