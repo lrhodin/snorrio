@@ -103,9 +103,7 @@ launchctl list io.snorrio.dmn 2>/dev/null
 # 5. recall CLI accessible?
 which recall 2>/dev/null
 
-# 6. Context injection configured?
-#    pi: automatic via dmn-context extension
-#    cc: check for SessionStart hook in ~/.claude/settings.json
+# 6. Context injection is automatic on both platforms (no check needed)
 ```
 
 If the source symlink is missing, create it by finding the clone:
@@ -228,29 +226,7 @@ Verify: `launchctl list io.snorrio.dmn` — PID present means success.
 
 #### 5. Context injection
 
-**Pi:** Automatic via the `dmn-context.ts` extension — no manual setup needed.
-
-**Claude Code:** Add a SessionStart hook to `~/.claude/settings.json`:
-
-```json
-{
-  "hooks": {
-    "SessionStart": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node ~/.snorrio/src/cc/session-start.mjs"
-          }
-        ]
-      }
-    ]
-  }
-}
-```
-
-Merge with existing settings — don't overwrite other hooks or config.
+**Automatic on both platforms.** Pi uses the `dmn-context.ts` extension. CC uses the SessionStart hook bundled with the plugin. No manual setup needed.
 
 #### 6. Identity document
 
