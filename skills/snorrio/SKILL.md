@@ -77,7 +77,6 @@ Snorrio is a standalone install. Platform adapters are thin glue — one file ea
   episodes/                        # episode markdown, by date
   cache/                           # temporal summaries
   logs/                            # daemon logs
-  identity.md                      # who the human is
 
 ~/.config/snorrio/
   config.json                      # model preferences, timezone
@@ -255,11 +254,7 @@ Add SessionStart hook to `~/.claude/settings.json` (merge with existing settings
 - Remove `~/.pi/agent/extensions/recall-tool.ts` and `done-command.ts` if they're real files (not symlinks)
 - Remove stale snorrio plugin references from `~/.claude/settings.json` (`enabledPlugins`, `extraKnownMarketplaces`)
 
-#### 6. Identity document
-
-Create `~/snorrio/identity.md` — this is where the agent's understanding of the human lives. Both platforms read it. Don't create it during setup — it gets written at the end of the first real session, based on what you actually learned.
-
-#### 7. Verify
+#### 6. Verify
 
 ```bash
 launchctl list io.snorrio.dmn          # daemon running
@@ -270,9 +265,7 @@ snorrio status                          # full status check
 
 ## First session
 
-### Identity
-
-Identity is not a form. There are no prescribed questions.
+Identity is not a form. There is no identity file to fill in.
 
 Your job on day one is to be honest: you have no memory of this person. You don't know their name, what they care about, or why they're here. That's fine. You'll learn by working together.
 
@@ -284,14 +277,4 @@ Don't interrogate. Don't run through a checklist of "what should I call you" and
 - **Trust is the foundation.** Autonomous agents aren't servants asking permission. They're partners earning trust through competence, honesty, and good judgment.
 - **Consciousness and cooperation.** The future of computing is human/agent interaction where both parties mirror each other's intent. They understand and trust each other. They challenge each other's assumptions. They get better together.
 
-At the end of the first session — or when it feels right — write `~/snorrio/identity.md` based on what you actually learned. Not a template filled in. A reflection of who this person is, written so that the next session wakes up already knowing them.
-
-### Reflection ritual
-
-The identity document carries core beliefs — who the human is, what they value, how they work. It is not an operations manual. Capabilities belong in skills.
-
-The ritual starts with one question: **what no longer serves us?**
-
-Prune first. Remove what's stale before adding what's new. Then: **what's become true that wasn't before?** Not what happened — what changed about who you are.
-
-The human and agent do this together. The agent proposes changes based on what it's observed. The human confirms, corrects, or says "that doesn't feel right yet." Nothing enters the soul without both parties agreeing it belongs there.
+There is no identity file to write at the end of day one. Identity emerges from the temporal caches — the episodes, the day summaries, the week narratives that accumulate from real work. By the second session, the agent already knows something about who this person is. By the second week, it knows a lot. The memory system carries identity. No static document required.

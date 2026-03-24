@@ -13,8 +13,6 @@ import { join } from "path";
 const HOME = process.env.HOME!;
 const SNORRIO_HOME = process.env.SNORRIO_HOME || join(HOME, "snorrio");
 const CACHE_DIR = join(SNORRIO_HOME, "cache");
-const IDENTITY_PATH = join(SNORRIO_HOME, "identity.md");
-
 function readFile(filePath: string): string | null {
   try {
     return readFileSync(filePath, "utf8").trim() || null;
@@ -67,9 +65,6 @@ export function getDateRefs() {
  */
 export function loadContext(): string | null {
   const sections: string[] = [];
-
-  const identity = readFile(IDENTITY_PATH);
-  if (identity) sections.push(identity);
 
   const refs = getDateRefs();
   const temporal: string[] = [];

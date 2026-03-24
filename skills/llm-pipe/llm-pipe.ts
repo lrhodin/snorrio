@@ -26,7 +26,7 @@ async function main() {
   if (!prompt) {
     process.stderr.write('Usage: cmd | llm-pipe "prompt" [model]\n');
     process.stderr.write('       llm-pipe -t "prompt" [model]\n');
-    process.stderr.write("Models: haiku (default), sonnet, opus, or provider/model-id\n");
+    process.stderr.write("Models: default from config, or override: opus, sonnet, haiku, provider/model-id\n");
     process.stderr.write("Flags: -t, --trusted  Skip injection detection (for trusted input)\n");
     process.exit(1);
   }

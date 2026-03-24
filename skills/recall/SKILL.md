@@ -6,6 +6,10 @@ description: Query past sessions and temporal summaries by reviving them with fu
 
 Query past sessions and temporal summaries. Recall revives past context and answers questions from first-person experience.
 
+## When to use recall
+
+If it happened in a past session and isn't saved as a file, recall is how you find it. Start at the temporal level that covers the time range and drill down.
+
 ## Invocation
 
 `recall` is on PATH (`~/.local/bin/recall`). Always use it directly — never run the source file.
@@ -31,18 +35,39 @@ recall 50690a64 "What beeper commands did you run?"
 
 ## Navigation pattern
 
-**Always drill down through layers. Never skip levels.**
+**Always drill down through layers.** Each level only knows about its direct subordinates — a quarter knows months, a month knows weeks, a week knows days, a day knows sessions.
 
-Each level only knows about its direct subordinates — a quarter knows months, a month knows weeks, a week knows days, a day knows sessions. Asking a quarter for a specific session ID will fail. Ask it which *month*, then ask the month which *week*, then drill further.
+At each level, ask a **locating question** — "which day," "which session" — to find where something lives. The content lives at the bottom. Every hop above that is navigation.
 
-1. `recall 2026-W10 "which day had the browser automation work?"` → "March 6th"
-2. `recall 2026-03-06 "which session set up CDP?"` → "session 50690a64"
-3. `recall 50690a64 "what was the exact Chrome launch command?"` → verbatim detail
+### Example: finding a letter someone sent you last week
+
+```
+recall 2026-W13 "Which day did I receive the letter?"
+→ "March 23rd, in session 45e74acf"
+
+recall 2026-03-23 "Which session had the letter?"
+→ "Session 45e74acf"
+
+recall 45e74acf "Reproduce the full text of the letter."
+→ [verbatim content]
+```
+
+Three hops. Each one narrows: week → day → session → content.
+
+### Example: finding a specific command from a past session
+
+```
+recall 2026-W10 "Which day had the browser automation work?"
+→ "March 6th"
+
+recall 2026-03-06 "Which session set up CDP?"
+→ "session 50690a64"
+
+recall 50690a64 "What was the exact Chrome launch command?"
+→ [verbatim detail]
+```
 
 Each hop takes ~1-2s. Three hops to exact detail in under 5 seconds.
-
-**Wrong:** `recall 2026-Q1 "what are the top 5 philosophical sessions?"` — the quarter doesn't have session-level detail.
-**Right:** `recall 2026-Q1 "which months had deep philosophical work?"` → drill to week → drill to day → get session IDs.
 
 ## Model selection
 

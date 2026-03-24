@@ -18,7 +18,7 @@ llm "what day is it"
 cat source.py | llm -t "explain this"
 git diff | llm -t "one sentence summary"
 
-# Model override (default: haiku)
+# Model override
 llm "prompt" sonnet
 llm "prompt" claude-sonnet-4-6
 ```
@@ -29,11 +29,9 @@ llm "prompt" claude-sonnet-4-6
 
 ## Models
 
-Default is Haiku (~1s simple, ~3-5s large input). Override with second argument:
+Default is whatever's configured in `~/.config/snorrio/config.json`. Don't override it. Override with second argument only if the user asks:
 - `haiku`, `sonnet`, `opus` — aliases
-- `provider/model-id` — explicit (e.g., `github-copilot/claude-haiku-4.5`)
-
-**Model choice:** Haiku for triage/filtering. Sonnet for extraction/summarization. Opus only for publication-ready prose.
+- `provider/model-id` — explicit
 
 ## CLI Setup
 
