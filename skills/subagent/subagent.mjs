@@ -152,12 +152,15 @@ function spawnOne(sessionName, promptFile, workDir) {
     const agentDir = createAgentDir(sessionName);
     cmd = `SUBAGENT_SESSION=${esc(sessionName)} PI_CODING_AGENT_DIR=${esc(agentDir)} pi @${esc(resolvedPrompt)}${signalSuffix}`;
   } else {
-    // CC: headless mode (-p) with Stop hook for early signaling
+    // CC: interactive in tmux with Stop hook for signaling
     // Write settings to temp file to avoid shell quoting issues with nested JSON
     const settingsFile = `/tmp/subagent-settings-${sessionName}.json`;
     const hookCmd = `echo done > /tmp/subagent-signaled-${sessionName} && tmux wait-for -S done-${sessionName}`;
-    writeFileSync(settingsFile, JSON.stringify({ hooks: { Stop: [{ type: "command", command: hookCmd }] } }));
-    cmd = `SUBAGENT_SESSION=${esc(sessionName)} claude -p --dangerously-skip-permissions --settings ${esc(settingsFile)} "$(cat ${esc(resolvedPrompt)})"${signalSuffix}`;
+    writeFileSync(settingsFile, JSON.stringify({
+      skipDangerousModePermissionPrompt: true,
+      hooks: { Stop: [{ matcher: "", hooks: [{ type: "command", command: hookCmd }] }] },
+    }));
+    cmd = `SUBAGENT_SESSION=${esc(sessionName)} claude --dangerously-skip-permissions --settings ${esc(settingsFile)} "$(cat ${esc(resolvedPrompt)})"${signalSuffix}`;
   }
 
   execSync(`tmux send-keys -t ${esc(sessionName)} ${esc(cmd)} Enter`, { stdio: "inherit" });
