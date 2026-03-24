@@ -37,21 +37,7 @@ Default is Haiku (~1s simple, ~3-5s large input). Override with second argument:
 
 ## CLI Setup
 
-The skill includes `llm-pipe.ts` in this directory. To use as `llm` from the shell:
-
-```bash
-cat > /usr/local/bin/llm << 'EOF'
-#!/bin/bash
-SKILL_DIR="$(dirname "$(readlink -f "$0")")/../.pi/agent/git/github.com/lrhodin/snorrio/skills/llm-pipe"
-# Fallback: find via pi's package directory
-if [ ! -f "$SKILL_DIR/llm-pipe.ts" ]; then
-  SKILL_DIR="$(find ~/.pi/agent/git -path "*/snorrio/skills/llm-pipe" -type d 2>/dev/null | head -1)"
-fi
-NODE_PATH=$(npm root -g)/@mariozechner/pi-coding-agent/node_modules \
-  exec node "$SKILL_DIR/llm-pipe.ts" "$@"
-EOF
-chmod +x /usr/local/bin/llm
-```
+`llm` is on PATH (`~/.local/bin/llm`). Always use it directly — never run the source file.
 
 ## Context discipline
 

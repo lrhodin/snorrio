@@ -6,7 +6,9 @@ description: Query past sessions and temporal summaries by reviving them with fu
 
 Query past sessions and temporal summaries. Recall revives past context and answers questions from first-person experience.
 
-## CLI usage
+## Invocation
+
+`recall` is on PATH (`~/.local/bin/recall`). Always use it directly — never run the source file.
 
 ```bash
 recall <ref> "question"

@@ -10,10 +10,7 @@ Your agent has never met you.
 <br>
 <br>
 
-```bash
-curl -fsSL https://snorr.io/install | bash
-pi
-```
+Point your agent at [snorr.io](https://snorr.io). It does the rest.
 
 <br>
 <br>

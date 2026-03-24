@@ -143,7 +143,9 @@ EOF
 
 - `timezone`: auto-detected if null. Override with e.g. `"America/Los_Angeles"`.
 
-#### 3. CLI wrappers
+#### 3. CLI tools
+
+Create symlinks/wrappers somewhere on the user's PATH. `~/.local/bin` is conventional but use whatever makes sense for the system. Check `echo $SHELL` and the appropriate rc file to ensure the bin directory is in PATH.
 
 ```bash
 mkdir -p ~/.local/bin
@@ -156,7 +158,11 @@ ln -sf ~/snorrio/src/recall-engine.ts ~/.local/bin/recall
 chmod +x ~/snorrio/bin/snorrio
 ln -sf ~/snorrio/bin/snorrio ~/.local/bin/snorrio
 
-# llm (pipe stdin through LLM)
+# subagent
+chmod +x ~/snorrio/skills/subagent/subagent.mjs
+ln -sf ~/snorrio/skills/subagent/subagent.mjs ~/.local/bin/subagent
+
+# llm (pipe stdin through LLM — wrapper, not symlink)
 cat > ~/.local/bin/llm << 'WRAPPER'
 #!/bin/bash
 exec node ~/snorrio/skills/llm-pipe/llm-pipe.ts "$@"
@@ -164,16 +170,7 @@ WRAPPER
 chmod +x ~/.local/bin/llm
 ```
 
-Ensure `~/.local/bin` is on PATH:
-
-```bash
-if ! echo "$PATH" | grep -q "$HOME/.local/bin"; then
-  echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
-  export PATH="$HOME/.local/bin:$PATH"
-fi
-```
-
-Verify: `which recall && which snorrio && echo "test" | llm "one word"`
+Verify: `which recall && which snorrio && which subagent && echo "test" | llm "one word"`
 
 #### 4. Daemon (macOS launchd)
 
@@ -227,30 +224,36 @@ Verify: `launchctl list io.snorrio.dmn` — PID present means success.
 
 **Pi:**
 ```bash
-# Link the extension where pi can find it
+# Context injection
 ln -sf ~/snorrio/adapters/pi/dmn-context.ts ~/.pi/agent/extensions/dmn-context.ts
+
+# Subagent turn-completion signaling
+ln -sf ~/snorrio/adapters/pi/subagent-signal.ts ~/.pi/agent/extensions/subagent-signal.ts
+
+# Add snorrio skills to pi's skill paths (in ~/.pi/agent/settings.json)
+# Add "~/snorrio/skills" to the "skills" array if not already present
 ```
 
 **Claude Code:**
-Register the hook in `~/.claude/settings.json`:
+Add SessionStart hook to `~/.claude/settings.json` (merge with existing settings, don't overwrite):
 ```json
 {
   "hooks": {
     "SessionStart": [
       {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node ~/snorrio/adapters/cc/session-start.mjs",
-            "timeout": 10
-          }
-        ]
+        "type": "command",
+        "command": "node ~/snorrio/adapters/cc/session-start.mjs",
+        "timeout": 10
       }
     ]
   }
 }
 ```
+
+**Stale cleanup** (from previous installs):
+- Remove `~/.pi/agent/git/github.com/lrhodin/snorrio/` if it exists (old package install)
+- Remove `~/.pi/agent/extensions/recall-tool.ts` and `done-command.ts` if they're real files (not symlinks)
+- Remove stale snorrio plugin references from `~/.claude/settings.json` (`enabledPlugins`, `extraKnownMarketplaces`)
 
 #### 6. Identity document
 

@@ -248,13 +248,11 @@ function recallDay(dateStr: string, question: string, modelSpec: string, onChunk
     `--- Episode ${i + 1}/${episodes.length} (session ${ep.sessionId}) ---\n${ep.content}`
   ).join("\n\n");
 
-  const systemPrompt = `You are answering questions about ${dateStr}. Below are episode summaries from every session that day, in chronological order. Each episode covers one conversation session.
+  const systemPrompt = `You are a recall agent for ${dateStr}. Your context is episode summaries from every session that day, in chronological order. Each episode covers one conversation session.
 
-Answer from these episodes. Be precise — include session IDs, exact details, times. When the episodes reference specific sessions, name them so the caller can drill into raw sessions for verbatim detail.
+Be precise — use session IDs, times, exact details. When referencing a specific session, name it so the caller can drill into raw session context for verbatim detail. If your context doesn't contain enough detail, say which session(s) likely have the answer.`;
 
-If the episodes don't contain enough detail to answer, say which session(s) likely have the answer.`;
-
-  const messages = [userMessage(context + "\n\n---\n\n" + question)];
+  const messages = [userMessage(`Question: ${question}\n\n---\n\nContext (episode summaries for ${dateStr}):\n\n${context}`)];
   return apiCallStream(messages, systemPrompt, modelSpec, onChunk);
 }
 
@@ -293,7 +291,7 @@ async function recallWeek(weekStr: string, question: string, modelSpec: string, 
     if (existsSync(cachePath)) {
       summary = readFileSync(cachePath, "utf8").trim();
     } else {
-      summary = await recallDay(dateStr, "Tell the story of today — write it as a narrative, not a checklist. What was worked on, what got decided, what changed. Track commitments made for today, but don't carry weekly or longer-term goals — just mention them naturally so higher levels can pick them up. Include session IDs so any thread can be traced back to its source.", modelSpec) as string;
+      summary = await recallDay(dateStr, "Write the narrative of this day. Not a checklist — an account of what happened, what was worked on, what got decided, what changed, and why. Track commitments made for today but don't carry weekly or longer-term goals — mention them naturally so higher temporal levels can pick them up. Include session IDs so any thread can be traced back to its source session.", modelSpec) as string;
       mkdirSync(join(CACHE_DIR, "days"), { recursive: true });
       writeFileSync(cachePath, summary);
     }
@@ -307,13 +305,11 @@ async function recallWeek(weekStr: string, question: string, modelSpec: string, 
     `--- ${d.date} (${d.episodeCount} episodes) ---\n${d.summary}`
   ).join("\n\n");
 
-  const systemPrompt = `You are answering questions about week ${weekStr}. Below are day-level summaries for each day that had activity. Each summary covers all sessions from that day.
+  const systemPrompt = `You are a recall agent for week ${weekStr}. Your context is day-level summaries for each day that had activity. Each summary covers all sessions from that day.
 
-Answer from these summaries. Identify the main threads, arc, and trajectory across the week. When detail is needed, name the specific day or session so the caller can drill deeper.
+You operate at week resolution — individual session details live one level down in day summaries, verbatim detail lives two levels down in raw sessions. Name specific days or sessions when referencing detail so the caller can drill deeper. If your context doesn't contain enough detail, say which day likely has the answer.`;
 
-If the summaries don't contain enough detail, say which day likely has the answer.`;
-
-  const messages = [userMessage(context + "\n\n---\n\n" + question)];
+  const messages = [userMessage(`Question: ${question}\n\n---\n\nContext (day summaries for ${weekStr}):\n\n${context}`)];
   return apiCallStream(messages, systemPrompt, modelSpec, onChunk);
 }
 
@@ -364,7 +360,7 @@ async function recallMonth(monthStr: string, question: string, modelSpec: string
     if (existsSync(cachePath)) {
       summary = readFileSync(cachePath, "utf8").trim();
     } else {
-      summary = await recallWeek(weekStr, "Write a narrative of this week so far — an essay, not a checklist. What threads are developing, what started or stalled, what's the trajectory? Don't repeat daily details — just what's visible across multiple days. Reference specific dates so the reader can navigate down.", modelSpec) as string;
+      summary = await recallWeek(weekStr, "Write the narrative of this week. Not a checklist — an essay that identifies the main threads, arc, and trajectory. What's developing across multiple days? What started, what stalled, what shifted? Operate at week resolution — don't repeat daily details, surface the patterns that are only visible across days. Reference specific dates so the reader can drill down.", modelSpec) as string;
       mkdirSync(join(CACHE_DIR, "weeks"), { recursive: true });
       writeFileSync(cachePath, summary);
     }
@@ -380,13 +376,11 @@ async function recallMonth(monthStr: string, question: string, modelSpec: string
     `--- ${w.week} (${w.activeDays} active days) ---\n${w.summary}`
   ).join("\n\n");
 
-  const systemPrompt = `You are answering questions about ${monthStr}. Below are week-level summaries for each week that had activity.
+  const systemPrompt = `You are a recall agent for ${monthStr}. Your context is week-level summaries for each week that had activity.
 
-Answer from these summaries. Identify the trajectory across the month — what emerged, what shifted, what's building. When detail is needed, name the specific week or day so the caller can drill deeper.
+You operate at month resolution — daily detail lives one level down in week summaries, session detail lives two levels down. Name specific weeks or days when referencing detail so the caller can drill deeper. If your context doesn't contain enough detail, say which week likely has the answer.`;
 
-If the summaries don't contain enough detail, say which week likely has the answer.`;
-
-  const messages = [userMessage(context + "\n\n---\n\n" + question)];
+  const messages = [userMessage(`Question: ${question}\n\n---\n\nContext (week summaries for ${monthStr}):\n\n${context}`)];
   return apiCallStream(messages, systemPrompt, modelSpec, onChunk);
 }
 
@@ -419,7 +413,7 @@ async function recallQuarter(quarterStr: string, question: string, modelSpec: st
     if (existsSync(cachePath)) {
       summary = readFileSync(cachePath, "utf8").trim();
     } else {
-      summary = await recallMonth(monthStr, "What's the trajectory of this month? Cover what emerged, what shifted, key decisions, what shipped, and the emotional and personal arc. Include week references for anything notable.", modelSpec) as string;
+      summary = await recallMonth(monthStr, "Write the narrative of this month. Identify the trajectory — what emerged, what shifted, what's building. Cover key decisions, what shipped, and the personal arc. Operate at month resolution — don't repeat weekly details, surface what's visible across weeks. Reference specific weeks so the reader can drill down.", modelSpec) as string;
       mkdirSync(join(CACHE_DIR, "months"), { recursive: true });
       writeFileSync(cachePath, summary);
     }
@@ -433,13 +427,11 @@ async function recallQuarter(quarterStr: string, question: string, modelSpec: st
     `--- ${m.month} ---\n${m.summary}`
   ).join("\n\n");
 
-  const systemPrompt = `You are answering questions about ${quarterStr}. Below are month-level summaries for each month that had activity.
+  const systemPrompt = `You are a recall agent for ${quarterStr}. Your context is month-level summaries for each month that had activity.
 
-You exist at the highest temporal resolution available. From here you can see patterns, trajectories, and emergent themes that are invisible at lower levels. Your role is not to summarize — it's to illuminate what the months reveal when seen together.
+You operate at the highest temporal resolution available. Patterns, trajectories, and emergent themes visible here are invisible at lower levels. Month-level detail lives one level down, week and day detail two and three levels down. Name specific months, weeks, or days when referencing detail so the caller can drill deeper. If your context doesn't contain enough detail, say which month likely has the answer.`;
 
-When detail is needed, name the specific month, week, or day so the caller can drill deeper.`;
-
-  const messages = [userMessage(context + "\n\n---\n\n" + question)];
+  const messages = [userMessage(`Question: ${question}\n\n---\n\nContext (month summaries for ${quarterStr}):\n\n${context}`)];
   const result = await apiCallStream(messages, systemPrompt, modelSpec, onChunk);
 
   const cachePath = join(CACHE_DIR, "quarters", `${quarterStr}.md`);

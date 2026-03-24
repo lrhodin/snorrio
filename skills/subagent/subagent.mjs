@@ -7,6 +7,12 @@ import { homedir, tmpdir } from "os";
 
 const PI_DIR = join(homedir(), ".pi", "agent");
 
+function detectHarness() {
+  try { execSync("which pi", { stdio: "pipe" }); return "pi"; } catch {}
+  try { execSync("which claude", { stdio: "pipe" }); return "cc"; } catch {}
+  throw new Error("No harness found. Install pi or Claude Code.");
+}
+
 function usage() {
   console.log(`Usage: subagent <command> [args]
 
@@ -40,7 +46,9 @@ function execSafe(cmd) {
 }
 
 function sessionExists(name) {
-  return execSafe(`tmux has-session -t ${esc(name)} 2>/dev/null`) !== null;
+  const out = execSafe(`tmux list-sessions -F "#{session_name}" 2>/dev/null`);
+  if (!out) return false;
+  return out.split("\n").includes(name);
 }
 
 function esc(s) {
@@ -116,7 +124,7 @@ function spawnOne(sessionName, promptFile, workDir) {
   const marker = `/tmp/subagent-signaled-${sessionName}`;
   try { rmSync(marker); } catch {}
 
-  const agentDir = createAgentDir(sessionName);
+  const harness = detectHarness();
 
   // Create tmux session (shell-first)
   const tmuxArgs = [`new-session`, `-d`, `-s`, sessionName];
@@ -125,10 +133,23 @@ function spawnOne(sessionName, promptFile, workDir) {
   }
   execSync(`tmux ${tmuxArgs.map(esc).join(" ")}`, { stdio: "inherit" });
 
-  // Send pi command — wrapper handles completion signaling (no extension needed).
-  // Exit code 0 → done, nonzero → failed.
-  const piCmd = `PI_CODING_AGENT_DIR=${esc(agentDir)} pi @${esc(resolvedPrompt)}; if [ $? -eq 0 ]; then touch ${esc(marker)} && tmux wait-for -S ${esc(`done-${sessionName}`)}; else touch ${esc(marker)} && tmux wait-for -S ${esc(`failed-${sessionName}`)}; fi`;
-  execSync(`tmux send-keys -t ${esc(sessionName)} ${esc(piCmd)} Enter`, { stdio: "inherit" });
+  // Build harness-specific command. Both use the same signaling pattern:
+  // SUBAGENT_SESSION env var → harness signals on turn completion → marker + tmux wait-for.
+  // Shell wrapper is the fallback for process exit.
+  const signalSuffix = `; _ec=$?; if [ $_ec -eq 0 ]; then echo done > ${esc(marker)} && tmux wait-for -S ${esc(`done-${sessionName}`)}; else echo failed > ${esc(marker)} && tmux wait-for -S ${esc(`failed-${sessionName}`)}; fi`;
+
+  let cmd;
+  if (harness === "pi") {
+    const agentDir = createAgentDir(sessionName);
+    cmd = `SUBAGENT_SESSION=${esc(sessionName)} PI_CODING_AGENT_DIR=${esc(agentDir)} pi @${esc(resolvedPrompt)}${signalSuffix}`;
+  } else {
+    // CC: inject Stop hook via --settings so only this session signals
+    const hookCmd = `[ -n "$SUBAGENT_SESSION" ] && echo done > /tmp/subagent-signaled-$SUBAGENT_SESSION && tmux wait-for -S done-$SUBAGENT_SESSION`;
+    const settings = JSON.stringify({ hooks: { Stop: [{ type: "command", command: hookCmd }] } });
+    cmd = `SUBAGENT_SESSION=${esc(sessionName)} claude --dangerously-skip-permissions --settings ${esc(settings)} "$(cat ${esc(resolvedPrompt)})"${signalSuffix}`;
+  }
+
+  execSync(`tmux send-keys -t ${esc(sessionName)} ${esc(cmd)} Enter`, { stdio: "inherit" });
 
   console.log(`spawned ${sessionName} → tmux attach -t ${sessionName}`);
   return true;
