@@ -1,16 +1,25 @@
 #!/usr/bin/env node
 
 import { execSync, spawn } from "child_process";
-import { mkdtempSync, cpSync, symlinkSync, readdirSync, rmSync, existsSync, statSync, readFileSync, mkdirSync } from "fs";
+import { mkdtempSync, cpSync, symlinkSync, readdirSync, rmSync, existsSync, statSync, readFileSync, mkdirSync, writeFileSync } from "fs";
 import { join, resolve, basename } from "path";
 import { homedir, tmpdir } from "os";
 
 const PI_DIR = join(homedir(), ".pi", "agent");
 
 function detectHarness() {
-  try { execSync("which pi", { stdio: "pipe" }); return "pi"; } catch {}
-  try { execSync("which claude", { stdio: "pipe" }); return "cc"; } catch {}
-  throw new Error("No harness found. Install pi or Claude Code.");
+  // Walk ancestor processes to find which harness we're running under
+  try {
+    let pid = process.ppid;
+    for (let i = 0; i < 5 && pid > 1; i++) {
+      const comm = execSync(`ps -o comm= -p ${pid}`, { encoding: "utf-8", stdio: "pipe" })
+        .trim().split("/").pop();
+      if (comm === "pi") return "pi";
+      if (comm === "claude") return "cc";
+      pid = parseInt(execSync(`ps -o ppid= -p ${pid}`, { encoding: "utf-8", stdio: "pipe" }).trim());
+    }
+  } catch {}
+  throw new Error("No harness found. Run from pi or Claude Code.");
 }
 
 function usage() {
@@ -143,10 +152,12 @@ function spawnOne(sessionName, promptFile, workDir) {
     const agentDir = createAgentDir(sessionName);
     cmd = `SUBAGENT_SESSION=${esc(sessionName)} PI_CODING_AGENT_DIR=${esc(agentDir)} pi @${esc(resolvedPrompt)}${signalSuffix}`;
   } else {
-    // CC: inject Stop hook via --settings so only this session signals
-    const hookCmd = `[ -n "$SUBAGENT_SESSION" ] && echo done > /tmp/subagent-signaled-$SUBAGENT_SESSION && tmux wait-for -S done-$SUBAGENT_SESSION`;
-    const settings = JSON.stringify({ hooks: { Stop: [{ type: "command", command: hookCmd }] } });
-    cmd = `SUBAGENT_SESSION=${esc(sessionName)} claude --dangerously-skip-permissions --settings ${esc(settings)} "$(cat ${esc(resolvedPrompt)})"${signalSuffix}`;
+    // CC: headless mode (-p) with Stop hook for early signaling
+    // Write settings to temp file to avoid shell quoting issues with nested JSON
+    const settingsFile = `/tmp/subagent-settings-${sessionName}.json`;
+    const hookCmd = `echo done > /tmp/subagent-signaled-${sessionName} && tmux wait-for -S done-${sessionName}`;
+    writeFileSync(settingsFile, JSON.stringify({ hooks: { Stop: [{ type: "command", command: hookCmd }] } }));
+    cmd = `SUBAGENT_SESSION=${esc(sessionName)} claude -p --dangerously-skip-permissions --settings ${esc(settingsFile)} "$(cat ${esc(resolvedPrompt)})"${signalSuffix}`;
   }
 
   execSync(`tmux send-keys -t ${esc(sessionName)} ${esc(cmd)} Enter`, { stdio: "inherit" });

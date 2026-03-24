@@ -4,7 +4,7 @@
 // Model can be an alias (haiku, sonnet, opus), full spec (github-copilot/claude-haiku-4.5),
 // or omitted to use the per-tool default from ~/.config/snorrio/config.json.
 
-import { resolveModel, stream, userMessage } from "../../src/ai.ts";
+import { stream, userMessage } from "../../src/ai.ts";
 
 // --- Stdin ---
 
@@ -48,10 +48,9 @@ async function main() {
   }
   const systemPrompt = systemParts.join("\n\n");
 
-  const resolved = await resolveModel(modelSpec, "llm-pipe");
   const messages = [userMessage(content)];
 
-  const eventStream = stream(resolved, messages, systemPrompt);
+  const eventStream = stream(messages, systemPrompt, modelSpec, "llm-pipe");
   for await (const event of eventStream) {
     if (event.type === "text_delta") {
       process.stdout.write(event.delta);

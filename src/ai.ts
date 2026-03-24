@@ -62,33 +62,44 @@ interface CompletionResult {
 type Backend = "pi" | "claude";
 
 let _detectedBackend: Backend | null = null;
-let _hasPi: boolean | null = null;
-let _hasClaude: boolean | null = null;
+
+/** Walk the process ancestor chain looking for pi or claude. */
+function detectPlatform(): Backend | null {
+  try {
+    let pid = process.ppid;
+    for (let i = 0; i < 5 && pid > 1; i++) {
+      const comm = execSync(`ps -o comm= -p ${pid}`, { encoding: "utf8", stdio: "pipe" })
+        .trim().split("/").pop();
+      if (comm === "pi") return "pi";
+      if (comm === "claude") return "claude";
+      pid = parseInt(execSync(`ps -o ppid= -p ${pid}`, { encoding: "utf8", stdio: "pipe" }).trim());
+    }
+  } catch {}
+  return null;
+}
 
 function hasPi(): boolean {
-  if (_hasPi === null) {
-    try {
-      execSync("which pi", { encoding: "utf8", stdio: "pipe" });
-      _hasPi = true;
-    } catch { _hasPi = false; }
-  }
-  return _hasPi;
+  try {
+    execSync("which pi", { encoding: "utf8", stdio: "pipe" });
+    return true;
+  } catch { return false; }
 }
 
 function hasClaude(): boolean {
-  if (_hasClaude === null) {
-    try {
-      execSync("which claude", { encoding: "utf8", stdio: "pipe" });
-      _hasClaude = true;
-    } catch { _hasClaude = false; }
-  }
-  return _hasClaude;
+  try {
+    execSync("which claude", { encoding: "utf8", stdio: "pipe" });
+    return true;
+  } catch { return false; }
 }
 
 export function getBackend(): Backend {
   if (_detectedBackend) return _detectedBackend;
 
-  // Auto-detect: prefer pi when both available
+  // First: check what platform we're running under
+  const platform = detectPlatform();
+  if (platform) { _detectedBackend = platform; return platform; }
+
+  // Fallback for standalone processes (daemon, recall engine): check what's installed
   if (hasPi()) { _detectedBackend = "pi"; return "pi"; }
   if (hasClaude()) { _detectedBackend = "claude"; return "claude"; }
 
@@ -436,9 +447,13 @@ async function* claudeStreamComplete(messages: Message[], systemPrompt: string, 
       if (!line.trim()) continue;
       try {
         const event = JSON.parse(line);
-        // CC stream-json emits content_block_delta events
-        if (event.type === "content_block_delta" && event.delta?.type === "text_delta") {
-          yield { type: "text_delta", delta: event.delta.text };
+        // CC stream-json emits assistant message events with content arrays
+        if (event.type === "assistant" && event.message?.content) {
+          for (const block of event.message.content) {
+            if (block.type === "text" && block.text) {
+              yield { type: "text_delta", delta: block.text };
+            }
+          }
         }
       } catch {}
     }
