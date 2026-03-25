@@ -1,22 +1,16 @@
 #!/usr/bin/env node
-// Snorrio AI — dual-backend LLM calls.
+// Snorrio AI — LLM calls via pi-ai.
 //
-// Two backends: pi-ai (in-process, fast) and claude CLI (subprocess).
-// Auto-detects what's installed. Prefers pi-ai when both available.
-// Config override via ~/.config/snorrio/config.json "backend" field.
-//
-// Session-level CC ops use claudeResume() which shells out to `claude --resume`.
-// Everything else (temporal ops, episode gen from pi sessions) uses complete()/stream().
+// Uses pi's model resolution, auth, and provider system.
+// Config override via ~/.config/snorrio/config.json.
 //
 // Usage:
-//   import { getBackend, complete, claudeResume } from "./ai.ts";
-//   const backend = getBackend();  // "pi" | "claude"
+//   import { complete, stream } from "./ai.ts";
 //   const result = await complete(messages, systemPrompt, modelSpec);
-//   const text = await claudeResume(sessionId, prompt, cwd);
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
 import { join } from "path";
-import { execSync, spawn as nodeSpawn } from "child_process";
+import { execSync } from "child_process";
 import { realpathSync } from "fs";
 
 // --- Types ---
@@ -57,53 +51,13 @@ interface CompletionResult {
   content?: Array<{ type: string; text?: string }>;
 }
 
-// --- Backend detection ---
-
-type Backend = "pi" | "claude";
-
-let _detectedBackend: Backend | null = null;
-
-/** Walk the process ancestor chain looking for pi or claude. */
-function detectPlatform(): Backend | null {
-  try {
-    let pid = process.ppid;
-    for (let i = 0; i < 5 && pid > 1; i++) {
-      const comm = execSync(`ps -o comm= -p ${pid}`, { encoding: "utf8", stdio: "pipe" })
-        .trim().split("/").pop();
-      if (comm === "pi") return "pi";
-      if (comm === "claude") return "claude";
-      pid = parseInt(execSync(`ps -o ppid= -p ${pid}`, { encoding: "utf8", stdio: "pipe" }).trim());
-    }
-  } catch {}
-  return null;
-}
+// --- Pi detection ---
 
 function hasPi(): boolean {
   try {
     execSync("which pi", { encoding: "utf8", stdio: "pipe" });
     return true;
   } catch { return false; }
-}
-
-function hasClaude(): boolean {
-  try {
-    execSync("which claude", { encoding: "utf8", stdio: "pipe" });
-    return true;
-  } catch { return false; }
-}
-
-export function getBackend(): Backend {
-  if (_detectedBackend) return _detectedBackend;
-
-  // First: check what platform we're running under
-  const platform = detectPlatform();
-  if (platform) { _detectedBackend = platform; return platform; }
-
-  // Fallback for standalone processes (daemon, recall engine): check what's installed
-  if (hasPi()) { _detectedBackend = "pi"; return "pi"; }
-  if (hasClaude()) { _detectedBackend = "claude"; return "claude"; }
-
-  throw new Error("No backend available. Install pi or Claude Code.");
 }
 
 // --- Lazy pi discovery ---
@@ -247,10 +201,6 @@ async function applyProviderModifications(model: Model): Promise<Model> {
 }
 
 export async function resolveModel(spec: string | null = null, toolName: string | null = null): Promise<Resolved> {
-  if (getBackend() !== "pi") {
-    throw new Error("resolveModel() requires pi backend");
-  }
-
   const config = loadConfig();
   const piAi = await getPiAi();
 
@@ -331,17 +281,7 @@ async function resolveAlias(alias: string, preferredProvider: string | null, piA
   throw new Error(`No auth available for '${alias}'. Need credentials for one of: ${providers}. Run: pi then /login`);
 }
 
-// --- Model spec resolution for claude backend ---
-
-function resolveModelSpec(spec: string | null, toolName: string | null): string {
-  const config = loadConfig();
-  return spec
-    || config.tools?.[toolName!]?.model
-    || config.model
-    || "opus";
-}
-
-// --- LLM Calls: pi backend ---
+// --- LLM Calls ---
 
 async function piComplete(messages: Message[], systemPrompt: string, modelSpec: string | null, toolName: string | null, options: Record<string, any> = {}): Promise<CompletionResult> {
   const resolved = await resolveModel(modelSpec, toolName);
@@ -364,211 +304,14 @@ async function* piStream(messages: Message[], systemPrompt: string, modelSpec: s
   yield* eventStream;
 }
 
-// --- LLM Calls: claude backend ---
-
-function claudeArgs(modelSpec: string, systemPrompt: string, extraArgs: string[] = []): string[] {
-  return [
-    "-p",
-    "--model", modelSpec,
-    "--system-prompt", systemPrompt,
-    "--tools", "",
-    "--no-session-persistence",
-    ...extraArgs,
-  ];
-}
-
-async function claudeComplete(messages: Message[], systemPrompt: string, modelSpec: string | null, toolName: string | null): Promise<CompletionResult> {
-  const model = resolveModelSpec(modelSpec, toolName);
-  // Flatten messages into a single prompt (claude -p takes a single prompt string)
-  const prompt = messages.map(m => {
-    const text = typeof m.content === "string" ? m.content
-      : m.content.filter((c: any) => c.type === "text").map((c: any) => c.text).join("");
-    return `[${m.role}]: ${text}`;
-  }).join("\n\n");
-
-  const args = claudeArgs(model, systemPrompt);
-
-  return new Promise((resolve, reject) => {
-    const proc = nodeSpawn("claude", [...args, prompt], {
-      cwd: "/",
-      stdio: ["pipe", "pipe", "pipe"],
-      env: { ...process.env },
-    });
-
-    let stdout = "";
-    let stderr = "";
-    proc.stdout.on("data", (d: Buffer) => stdout += d);
-    proc.stderr.on("data", (d: Buffer) => stderr += d);
-    proc.on("error", reject);
-    proc.on("close", (code: number) => {
-      if (code !== 0) {
-        resolve({
-          stopReason: "error",
-          errorMessage: stderr || `claude exited with code ${code}`,
-        });
-        return;
-      }
-      resolve({
-        stopReason: "end_turn",
-        content: [{ type: "text", text: stdout }],
-      });
-    });
-  });
-}
-
-async function* claudeStreamComplete(messages: Message[], systemPrompt: string, modelSpec: string | null, toolName: string | null): AsyncGenerator<any> {
-  const model = resolveModelSpec(modelSpec, toolName);
-  const prompt = messages.map(m => {
-    const text = typeof m.content === "string" ? m.content
-      : m.content.filter((c: any) => c.type === "text").map((c: any) => c.text).join("");
-    return `[${m.role}]: ${text}`;
-  }).join("\n\n");
-
-  const args = claudeArgs(model, systemPrompt, [
-    "--output-format", "stream-json",
-    "--verbose",
-  ]);
-
-  const proc = nodeSpawn("claude", [...args, prompt], {
-    cwd: "/",
-    stdio: ["pipe", "pipe", "pipe"],
-    env: { ...process.env },
-  });
-
-  let buffer = "";
-  const chunks: string[] = [];
-
-  for await (const data of proc.stdout) {
-    buffer += data.toString();
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || "";
-
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      try {
-        const event = JSON.parse(line);
-        // CC stream-json emits assistant message events with content arrays
-        if (event.type === "assistant" && event.message?.content) {
-          for (const block of event.message.content) {
-            if (block.type === "text" && block.text) {
-              yield { type: "text_delta", delta: block.text };
-            }
-          }
-        }
-      } catch {}
-    }
-  }
-}
-
-// --- Unified API ---
+// --- Public API ---
 
 export async function complete(messages: Message[], systemPrompt: string, modelSpec: string | null = null, toolName: string | null = null, options: Record<string, any> = {}): Promise<CompletionResult> {
-  const backend = getBackend();
-  if (backend === "pi") {
-    return piComplete(messages, systemPrompt, modelSpec, toolName, options);
-  }
-  return claudeComplete(messages, systemPrompt, modelSpec, toolName);
+  return piComplete(messages, systemPrompt, modelSpec, toolName, options);
 }
 
 export async function* stream(messages: Message[], systemPrompt: string, modelSpec: string | null = null, toolName: string | null = null, options: Record<string, any> = {}): AsyncGenerator<any> {
-  const backend = getBackend();
-  if (backend === "pi") {
-    yield* piStream(messages, systemPrompt, modelSpec, toolName, options);
-  } else {
-    yield* claudeStreamComplete(messages, systemPrompt, modelSpec, toolName);
-  }
-}
-
-// --- Claude Resume (CC session operations) ---
-
-export interface ClaudeResumeOptions {
-  appendSystemPrompt?: string;
-  model?: string;
-  toolName?: string;
-  stream?: boolean;
-}
-
-export async function claudeResume(sessionId: string, prompt: string, cwd: string, options: ClaudeResumeOptions = {}): Promise<string> {
-  if (!hasClaude()) throw new Error("Claude Code not installed");
-
-  const model = options.model || resolveModelSpec(null, options.toolName || null);
-  const args = [
-    "--resume", sessionId,
-    "-p",
-    "--model", model,
-    "--tools", "",
-    "--no-session-persistence",
-    "--fork-session",
-  ];
-  if (options.appendSystemPrompt) {
-    args.push("--append-system-prompt", options.appendSystemPrompt);
-  }
-  args.push(prompt);
-
-  return new Promise((resolve, reject) => {
-    const proc = nodeSpawn("claude", args, {
-      cwd,
-      stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env },
-    });
-
-    let stdout = "";
-    let stderr = "";
-    proc.stdout.on("data", (d: Buffer) => stdout += d);
-    proc.stderr.on("data", (d: Buffer) => stderr += d);
-    proc.on("error", reject);
-    proc.on("close", (code: number) => {
-      if (code !== 0) {
-        reject(new Error(stderr || `claude exited with code ${code}`));
-        return;
-      }
-      resolve(stdout);
-    });
-  });
-}
-
-export async function* claudeResumeStream(sessionId: string, prompt: string, cwd: string, options: ClaudeResumeOptions = {}): AsyncGenerator<{ type: string; delta: string }> {
-  if (!hasClaude()) throw new Error("Claude Code not installed");
-
-  const model = options.model || resolveModelSpec(null, options.toolName || null);
-  const args = [
-    "--resume", sessionId,
-    "-p",
-    "--model", model,
-    "--tools", "",
-    "--no-session-persistence",
-    "--fork-session",
-    "--output-format", "stream-json",
-    "--verbose",
-  ];
-  if (options.appendSystemPrompt) {
-    args.push("--append-system-prompt", options.appendSystemPrompt);
-  }
-  args.push(prompt);
-
-  const proc = nodeSpawn("claude", args, {
-    cwd,
-    stdio: ["pipe", "pipe", "pipe"],
-    env: { ...process.env },
-  });
-
-  let buffer = "";
-
-  for await (const data of proc.stdout) {
-    buffer += data.toString();
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || "";
-
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      try {
-        const event = JSON.parse(line);
-        if (event.type === "content_block_delta" && event.delta?.type === "text_delta") {
-          yield { type: "text_delta", delta: event.delta.text };
-        }
-      } catch {}
-    }
-  }
+  yield* piStream(messages, systemPrompt, modelSpec, toolName, options);
 }
 
 // --- Config Management ---

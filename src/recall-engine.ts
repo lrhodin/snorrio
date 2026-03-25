@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 // recall-engine — unified recall across sessions, days, weeks, months, quarters.
 //
-// Routes by platform: pi sessions use buildSessionContext + complete(),
-// CC sessions use claude --resume. Temporal ops are platform-agnostic
-// (episode markdown through complete()).
+// Sessions use buildSessionContext + complete(). Temporal ops load
+// episode markdown through complete().
 //
 // Refs:
 //   session UUID or .jsonl path → load session context
@@ -19,8 +18,8 @@
 
 import { readFileSync, readdirSync, existsSync, writeFileSync, mkdirSync } from "fs";
 import { join } from "path";
-import { complete, stream as aiStream, getText, userMessage, claudeResume, SNORRIO_HOME, piRoot, getTimezone } from "./ai.ts";
-import { findSession, sessionIdFromPath, extractCwd, type SessionInfo } from "./session-meta.ts";
+import { complete, stream as aiStream, getText, userMessage, SNORRIO_HOME, piRoot, getTimezone } from "./ai.ts";
+import { findSession, sessionIdFromPath, type SessionInfo } from "./session-meta.ts";
 
 const HOME = process.env.HOME!;
 const PI_SESSIONS_DIR = join(HOME, ".pi/agent/sessions");
@@ -141,47 +140,10 @@ async function recallPiSession(sessionFile: string, question: string, modelSpec:
   return apiCallStream([...ctx.messages, userMessage(q)], systemPrompt, modelSpec, options.onChunk);
 }
 
-async function recallCcSession(session: SessionInfo, question: string, modelSpec: string, options: { context?: boolean; onChunk?: OnChunk } = {}) {
-  const cwd = extractCwd(session.path);
-  if (!cwd) return `[recall: could not extract cwd from CC session ${session.id}]`;
-
-  let temporalCtx = "";
-  if (options.context) {
-    // CC filenames don't have timestamps, read from first entry
-    const raw = readFileSync(session.path, "utf8");
-    const firstLine = raw.slice(0, raw.indexOf("\n"));
-    try {
-      const entry = JSON.parse(firstLine);
-      if (entry.timestamp) {
-        temporalCtx = loadTemporalContext(new Date(entry.timestamp));
-      }
-    } catch {}
-  }
-
-  const appendSystem = RECALL_SYSTEM + temporalCtx;
-  const q = question + "\n\nRespond in plain text. Do not call any tools.";
-
-  try {
-    const result = await claudeResume(session.id, q, cwd, {
-      appendSystemPrompt: appendSystem,
-      model: modelSpec,
-    });
-    return result;
-  } catch (err: any) {
-    return `[recall: CC session error — ${err.message?.slice(0, 200)}]`;
-  }
-}
-
 function recallSession(ref: string, question: string, modelSpec: string, options: { context?: boolean; onChunk?: OnChunk } = {}) {
   // Direct .jsonl path
   if (ref.endsWith(".jsonl")) {
     if (!existsSync(ref)) return `[recall: file not found — ${ref}]`;
-    const platform = ref.includes(".claude/projects") ? "cc" : "pi";
-    if (platform === "cc") {
-      const id = sessionIdFromPath(ref);
-      if (!id) return `[recall: could not extract session ID from ${ref}]`;
-      return recallCcSession({ path: ref, platform: "cc", id }, question, modelSpec, options);
-    }
     return recallPiSession(ref, question, modelSpec, options);
   }
 
@@ -189,9 +151,6 @@ function recallSession(ref: string, question: string, modelSpec: string, options
   const session = findSession(ref);
   if (!session) return `[recall: session not found — ${ref}]`;
 
-  if (session.platform === "cc") {
-    return recallCcSession(session, question, modelSpec, options);
-  }
   return recallPiSession(session.path, question, modelSpec, options);
 }
 

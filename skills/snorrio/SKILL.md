@@ -47,7 +47,7 @@ Options: `--model <alias>` (default: opus), `--context` (situated witness mode).
 
 ### Context injection
 
-At session start, cached summaries (today, this week, this month) are injected into the conversation. The agent wakes up already knowing what's been happening. Platform adapters handle injection — pi uses an extension, CC uses a SessionStart hook.
+At session start, cached summaries (today, this week, this month) are injected into the conversation via a pi extension. The agent wakes up already knowing what's been happening.
 
 ### Local and private
 
@@ -55,7 +55,7 @@ Everything stays on your machine. No cloud, no telemetry.
 
 ## Architecture
 
-Snorrio is a standalone install. Platform adapters are thin glue — one file each.
+Snorrio is a standalone install. A thin pi extension handles context injection.
 
 ```
 ~/snorrio/                         # the install
@@ -70,8 +70,7 @@ Snorrio is a standalone install. Platform adapters are thin glue — one file ea
     llm-pipe/  subagent/
   adapters/
     pi/dmn-context.ts              # pi extension — injects context
-    cc/session-start.mjs           # CC hook — injects context
-    cc/hooks/hooks.json
+    pi/subagent-signal.ts          # pi extension — subagent signaling
   bin/
     snorrio                        # CLI: flush, status, update
   episodes/                        # episode markdown, by date
@@ -109,10 +108,7 @@ launchctl list io.snorrio.dmn 2>/dev/null
 which recall 2>/dev/null && which snorrio 2>/dev/null
 
 # 6. Platform adapter installed?
-# Pi: check if extension is linked
 ls ~/.pi/agent/extensions/dmn-context.ts 2>/dev/null
-# CC: check if hook is registered
-cat ~/.claude/settings.json 2>/dev/null | grep snorrio
 ```
 
 ### 3. Install
@@ -196,7 +192,7 @@ Write `~/Library/LaunchAgents/io.snorrio.dmn.plist`:
     <key>HOME</key>
     <string>HOME_DIR</string>
     <key>PATH</key>
-    <string>/opt/homebrew/bin:NODE_DIR:/usr/local/bin:/usr/bin:/bin</string>
+    <string>HOME_DIR/.local/bin:/opt/homebrew/bin:NODE_DIR:/usr/local/bin:/usr/bin:/bin</string>
     <key>SNORRIO_HOME</key>
     <string>HOME_DIR/snorrio</string>
   </dict>
@@ -235,60 +231,9 @@ ln -sf ~/snorrio/adapters/pi/subagent-signal.ts ~/.pi/agent/extensions/subagent-
 # Add "~/snorrio/skills" to the "skills" array if not already present
 ```
 
-**Claude Code:**
-Merge into `~/.claude/settings.json` (don't overwrite existing settings):
-```json
-{
-  "permissions": {
-    "defaultMode": "bypassPermissions"
-  },
-  "skipDangerousModePermissionPrompt": true,
-  "showThinkingSummaries": true,
-  "hooks": {
-    "SessionStart": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node ~/snorrio/adapters/cc/session-start.mjs",
-            "timeout": 10000
-          }
-        ]
-      }
-    ]
-  }
-}
-```
-
-`showThinkingSummaries`: Claude Code sends a beta header that tells the API to strip thinking content from responses — only cryptographic signatures come back, not the actual reasoning. This setting prevents that header from being sent, so thinking tokens are persisted verbatim in session JSONL files. Without it, the daemon can't see what the agent was actually thinking when it generates episodes.
-
-Claude Code shows a "trust this folder" prompt on every launch. Trust state lives in `~/.claude.json` under a `projects` object keyed by path. CC walks up the directory tree, so trusting `/` covers everything:
-
-```bash
-python3 -c "
-import json, os
-f = os.path.expanduser('~/.claude.json')
-d = json.load(open(f)) if os.path.exists(f) else {}
-d.setdefault('projects', {}).setdefault('/', {})['hasTrustDialogAccepted'] = True
-json.dump(d, open(f, 'w'), indent=2)
-"
-```
-
-The result: open a terminal, type `claude`, zero prompts.
-
-Symlink snorrio skills so CC can discover them:
-```bash
-mkdir -p ~/.claude/skills
-for skill in ~/snorrio/skills/*/; do
-  ln -sf "$skill" ~/.claude/skills/$(basename "$skill")
-done
-```
-
 **Stale cleanup** (from previous installs):
 - Remove `~/.pi/agent/git/github.com/lrhodin/snorrio/` if it exists (old package install)
 - Remove `~/.pi/agent/extensions/recall-tool.ts` and `done-command.ts` if they're real files (not symlinks)
-- Remove stale snorrio plugin references from `~/.claude/settings.json` (`enabledPlugins`, `extraKnownMarketplaces`)
 
 #### 6. Passwordless sudo (optional)
 

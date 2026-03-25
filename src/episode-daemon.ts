@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // Episode pipeline daemon.
 //
-// Watches pi and CC session files. After 4:30 of inactivity on a file,
-// generates an episode. Pi sessions use buildSessionContext + complete().
-// CC sessions use claude --resume. Midnight sweep catches anything missed.
+// Watches pi session files. After 4:30 of inactivity on a file,
+// generates an episode using buildSessionContext + complete().
+// Midnight sweep catches anything missed.
 //
 // No manifest. No state tracking. Idempotent — episodes overwrite freely.
 // No minimum message threshold — every session with an assistant message
@@ -32,12 +32,12 @@ import {
 } from "fs";
 import { join, basename } from "path";
 import { hostname as osHostname } from "os";
-import { complete, getText, userMessage, claudeResume, SNORRIO_HOME, piRoot, getTimezone } from "./ai.ts";
+import { complete, getText, userMessage, SNORRIO_HOME, piRoot, getTimezone } from "./ai.ts";
 import { recall } from "./recall-engine.ts";
 import {
-  detectPlatform, sessionIdFromPath, sessionIdFromEntries,
+  sessionIdFromPath, sessionIdFromEntries,
   sessionTimestamps as metaTimestamps, hasAssistantMessage as metaHasAssistant,
-  extractCwd, allSessions as metaAllSessions, type Platform, type SessionInfo,
+  allSessions as metaAllSessions, type SessionInfo,
 } from "./session-meta.ts";
 
 // Lazy pi session manager — only loaded when processing pi sessions
@@ -54,7 +54,6 @@ async function getPiSessionManager() {
 
 const HOME = process.env.HOME!;
 const PI_SESSIONS_DIR = join(HOME, ".pi/agent/sessions");
-const CC_PROJECTS_DIR = join(HOME, ".claude/projects");
 const EPISODES_DIR = join(SNORRIO_HOME, "episodes");
 const CACHE_DIR = join(SNORRIO_HOME, "cache");
 
@@ -123,7 +122,6 @@ const EPISODE_SYSTEM = `You write journal entries from coding agent sessions. An
 const EPISODE_PROMPT = "Write a journal entry for this session.\n\nRespond in plain text. Do not call any tools.";
 
 async function generateEpisode(filePath: string) {
-  const platform = detectPlatform(filePath);
   const id = sessionIdFromEntries(filePath);
   if (!id) { log(`  No session ID: ${basename(filePath)}`); return null; }
 
@@ -132,54 +130,35 @@ async function generateEpisode(filePath: string) {
   const { start, end } = metaTimestamps(filePath);
   const dateStr = toDateStr(end || start || new Date().toISOString());
 
-  log(`  Generating: ${id.slice(0, 8)} (${dateStr}) [${platform}]`);
+  log(`  Generating: ${id.slice(0, 8)} (${dateStr})`);
 
-  let text: string;
+  const { loadEntriesFromFile, buildSessionContext } = await getPiSessionManager();
+  const entries = loadEntriesFromFile(filePath);
+  const sessionEntries = entries.filter((e: any) => e.type !== "session");
 
-  if (platform === "cc") {
-    const cwd = extractCwd(filePath);
-    if (!cwd) { log(`  No cwd in CC session: ${id.slice(0, 8)}`); return null; }
+  let ctx: any;
+  try { ctx = buildSessionContext(sessionEntries); }
+  catch (err: any) {
+    log(`  Context failed ${id.slice(0, 8)}: ${err.message?.slice(0, 200)}`);
+    return null;
+  }
+  if (!ctx.messages.length) { log(`  Empty context: ${id.slice(0, 8)}`); return null; }
 
-    try {
-      text = await claudeResume(id, EPISODE_PROMPT, cwd, {
-        appendSystemPrompt: EPISODE_SYSTEM,
-        toolName: "dmn",
-      });
-    } catch (err: any) {
-      log(`  CC error ${id.slice(0, 8)}: ${err.message?.slice(0, 200)}`);
-      return null;
-    }
-  } else {
-    // Pi session — use buildSessionContext + complete()
-    const { loadEntriesFromFile, buildSessionContext } = await getPiSessionManager();
-    const entries = loadEntriesFromFile(filePath);
-    const sessionEntries = entries.filter((e: any) => e.type !== "session");
+  const messages = [
+    ...ctx.messages,
+    userMessage(EPISODE_PROMPT),
+  ];
 
-    let ctx: any;
-    try { ctx = buildSessionContext(sessionEntries); }
-    catch (err: any) {
-      log(`  Context failed ${id.slice(0, 8)}: ${err.message?.slice(0, 200)}`);
-      return null;
-    }
-    if (!ctx.messages.length) { log(`  Empty context: ${id.slice(0, 8)}`); return null; }
-
-    const messages = [
-      ...ctx.messages,
-      userMessage(EPISODE_PROMPT),
-    ];
-
-    const result = await complete(messages, EPISODE_SYSTEM, null, "dmn");
-    if (result.stopReason === "error") {
-      log(`  API error ${id.slice(0, 8)}: ${(result.errorMessage || "").slice(0, 200)}`);
-      return null;
-    }
-
-    text = getText(result);
+  const result = await complete(messages, EPISODE_SYSTEM, null, "dmn");
+  if (result.stopReason === "error") {
+    log(`  API error ${id.slice(0, 8)}: ${(result.errorMessage || "").slice(0, 200)}`);
+    return null;
   }
 
+  const text = getText(result);
   if (!text?.trim()) { log(`  Empty output: ${id.slice(0, 8)}`); return null; }
 
-  const fm = buildFrontmatter(platform === "cc" ? "cc" : "pi", filePath, end || start || new Date().toISOString());
+  const fm = buildFrontmatter("pi", filePath, end || start || new Date().toISOString());
   const dir = join(EPISODES_DIR, dateStr);
   mkdirSync(dir, { recursive: true });
   const epPath = join(dir, `${id}.md`);
@@ -298,21 +277,11 @@ function onSessionChange(filePath: string) {
 }
 
 function startWatcher() {
-  // Watch pi sessions
   if (existsSync(PI_SESSIONS_DIR)) {
-    log(`Watching pi: ${PI_SESSIONS_DIR}`);
+    log(`Watching: ${PI_SESSIONS_DIR}`);
     watch(PI_SESSIONS_DIR, { recursive: true }, (_, filename) => {
       if (!filename?.endsWith(".jsonl")) return;
       onSessionChange(join(PI_SESSIONS_DIR, filename));
-    });
-  }
-
-  // Watch CC sessions
-  if (existsSync(CC_PROJECTS_DIR)) {
-    log(`Watching cc: ${CC_PROJECTS_DIR}`);
-    watch(CC_PROJECTS_DIR, { recursive: true }, (_, filename) => {
-      if (!filename?.endsWith(".jsonl")) return;
-      onSessionChange(join(CC_PROJECTS_DIR, filename));
     });
   }
 }
@@ -525,36 +494,25 @@ async function reprocess(rangeStr: string, depthStr?: string) {
 
         const { start, end } = metaTimestamps(s.path);
         const dateStr = toDateStr(end || start || new Date().toISOString());
-        log(`    ${s.id.slice(0, 8)} (${dateStr}) [${s.platform}] started`);
+        log(`    ${s.id.slice(0, 8)} (${dateStr}) started`);
 
-        let text: string;
+        const { loadEntriesFromFile, buildSessionContext } = await getPiSessionManager();
+        const entries = loadEntriesFromFile(s.path);
+        const sessionEntries = entries.filter((e: any) => e.type !== "session");
+        let ctx: any;
+        try { ctx = buildSessionContext(sessionEntries); }
+        catch (err: any) { log(`    Context failed ${s.id.slice(0,8)}: ${err.message?.slice(0,100)}`); fail++; return; }
+        if (!ctx.messages.length) { skip++; return; }
 
-        if (s.platform === "cc") {
-          const cwd = extractCwd(s.path);
-          if (!cwd) { log(`    ${s.id.slice(0, 8)} ✗ no cwd`); fail++; return; }
-          text = await claudeResume(s.id, EPISODE_PROMPT, cwd, {
-            appendSystemPrompt: EPISODE_SYSTEM,
-            toolName: "dmn",
-          });
-        } else {
-          const { loadEntriesFromFile, buildSessionContext } = await getPiSessionManager();
-          const entries = loadEntriesFromFile(s.path);
-          const sessionEntries = entries.filter((e: any) => e.type !== "session");
-          let ctx: any;
-          try { ctx = buildSessionContext(sessionEntries); }
-          catch (err: any) { log(`    Context failed ${s.id.slice(0,8)}: ${err.message?.slice(0,100)}`); fail++; return; }
-          if (!ctx.messages.length) { skip++; return; }
-
-          const messages = [...ctx.messages, userMessage(EPISODE_PROMPT)];
-          const result = await complete(messages, EPISODE_SYSTEM, null, "dmn");
-          text = getText(result);
-          if (!text?.trim()) {
-            log(`    ${s.id.slice(0, 8)} ✗ empty response (stopReason: ${result.stopReason})`);
-            fail++; return;
-          }
+        const messages = [...ctx.messages, userMessage(EPISODE_PROMPT)];
+        const result = await complete(messages, EPISODE_SYSTEM, null, "dmn");
+        const text = getText(result);
+        if (!text?.trim()) {
+          log(`    ${s.id.slice(0, 8)} ✗ empty response (stopReason: ${result.stopReason})`);
+          fail++; return;
         }
 
-        const fm = buildFrontmatter(s.platform === "cc" ? "cc" : "pi", s.path, end || start || new Date().toISOString());
+        const fm = buildFrontmatter("pi", s.path, end || start || new Date().toISOString());
         const dir = join(EPISODES_DIR, dateStr);
         mkdirSync(dir, { recursive: true });
         const epPath = join(dir, `${s.id}.md`);
@@ -778,7 +736,7 @@ async function addFrontmatter() {
       const ts = session ? (session.end || session.start || `${dateDir}T00:00:00Z`) : `${dateDir}T00:00:00Z`;
       if (!session) notFound++;
 
-      const origin = sourcePath.includes(".claude/projects") ? "cc" : "pi";
+      const origin = "pi";
       const fm = buildFrontmatter(origin, sourcePath, ts);
       atomicWrite(epPath, fm + content);
       updated++;

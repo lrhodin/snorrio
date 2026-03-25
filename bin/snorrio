@@ -124,10 +124,6 @@ if (cmd === "flush") {
   } catch {}
   console.log(`Episodes:  ${todayCount} today, ${totalDays} days total`);
 
-  // Identity
-  const identityPath = join(SNORRIO_HOME, "identity.md");
-  console.log(`Identity:  ${existsSync(identityPath) ? "present" : "missing"}`);
-
   // Config
   const configPath = join(HOME, ".config/snorrio/config.json");
   console.log(`Config:    ${existsSync(configPath) ? configPath : "missing"}`);
