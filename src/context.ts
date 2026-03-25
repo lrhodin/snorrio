@@ -1,7 +1,7 @@
 // Context loader — shared date math and cache reading.
 //
-// Returns a string to inject at session start. Used by both
-// pi (dmn-context.ts extension) and CC (session-start.mjs hook).
+// Returns a string to inject at session start.
+// Used by the pi extension (dmn-context.ts).
 //
 // Usage:
 //   import { loadContext } from "./context.ts";

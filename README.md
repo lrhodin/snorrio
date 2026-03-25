@@ -10,7 +10,11 @@ Your agent has never met you.
 <br>
 <br>
 
-Point your agent at [snorr.io](https://snorr.io). It does the rest.
+```
+curl -sSL snorr.io/install | bash
+```
+
+Then launch pi.
 
 <br>
 <br>
