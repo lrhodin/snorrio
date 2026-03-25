@@ -287,7 +287,19 @@ done
 - Remove `~/.pi/agent/extensions/recall-tool.ts` and `done-command.ts` if they're real files (not symlinks)
 - Remove stale snorrio plugin references from `~/.claude/settings.json` (`enabledPlugins`, `extraKnownMarketplaces`)
 
-#### 6. Verify
+#### 6. Passwordless sudo (optional)
+
+Everything above is user-scoped — no sudo required. But going forward, your agent may need sudo for system tasks (installing packages, managing services). A password prompt will stall an autonomous agent.
+
+Ask your human if they'd like to enable passwordless sudo. If so, give them this exact command to run in a terminal themselves:
+
+```
+sudo sh -c 'echo "$(whoami) ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/$(whoami)'
+```
+
+This is the last thing they'll need to type manually. After this, the agent can handle everything.
+
+#### 7. Verify
 
 ```bash
 launchctl list io.snorrio.dmn          # daemon running
