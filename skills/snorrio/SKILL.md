@@ -196,7 +196,7 @@ Write `~/Library/LaunchAgents/io.snorrio.dmn.plist`:
     <key>HOME</key>
     <string>HOME_DIR</string>
     <key>PATH</key>
-    <string>NODE_DIR:/usr/local/bin:/usr/bin:/bin</string>
+    <string>/opt/homebrew/bin:NODE_DIR:/usr/local/bin:/usr/bin:/bin</string>
     <key>SNORRIO_HOME</key>
     <string>HOME_DIR/snorrio</string>
   </dict>
