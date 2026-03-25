@@ -274,6 +274,14 @@ json.dump(d, open(f, 'w'), indent=2)
 
 The result: open a terminal, type `claude`, zero prompts.
 
+Symlink snorrio skills so CC can discover them:
+```bash
+mkdir -p ~/.claude/skills
+for skill in ~/snorrio/skills/*/; do
+  ln -sf "$skill" ~/.claude/skills/$(basename "$skill")
+done
+```
+
 **Stale cleanup** (from previous installs):
 - Remove `~/.pi/agent/git/github.com/lrhodin/snorrio/` if it exists (old package install)
 - Remove `~/.pi/agent/extensions/recall-tool.ts` and `done-command.ts` if they're real files (not symlinks)
