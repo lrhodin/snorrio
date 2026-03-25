@@ -27,7 +27,7 @@
 
 import { watch } from "fs";
 import {
-  readFileSync, writeFileSync, mkdirSync, existsSync,
+  readFileSync, writeFileSync, mkdirSync, existsSync, statSync,
   readdirSync, unlinkSync, renameSync, appendFileSync,
 } from "fs";
 import { join, basename } from "path";
@@ -334,7 +334,13 @@ async function sweep() {
     if (!metaHasAssistant(s.path)) continue;
     const { start, end } = metaTimestamps(s.path);
     const dateStr = toDateStr(end || start || new Date().toISOString());
-    if (existsSync(join(EPISODES_DIR, dateStr, `${s.id}.md`))) { skip++; continue; }
+    const epPath = join(EPISODES_DIR, dateStr, `${s.id}.md`);
+    if (existsSync(epPath)) {
+      const sessionMtime = statSync(s.path).mtimeMs;
+      const episodeMtime = statSync(epPath).mtimeMs;
+      if (sessionMtime <= episodeMtime) { skip++; continue; }
+      log(`  Stale episode: ${s.id.slice(0, 8)} (session newer by ${Math.round((sessionMtime - episodeMtime) / 1000)}s)`);
+    }
     todo.push(s);
   }
   log(`  ${todo.length} sessions need episodes, ${skip} already exist (concurrency: ${CONCURRENCY})`);
