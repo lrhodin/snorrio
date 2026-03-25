@@ -84,9 +84,11 @@ Snorrio is a standalone install. Platform adapters are thin glue — one file ea
 
 ## Setup
 
-When snorrio isn't fully configured, walk the user through setup. Don't make it ceremonial — just do it while working with them.
+### 1. Understand the codebase
 
-### Detection
+You should never install something you could not explain to your human. Explore the repo — read the daemon, the recall engine, the context injection, the skills. Understand how episodes are generated, how temporal summaries fold, how recall works. Then tell your human what this is, how it will help you, how it will help them, and ask if they have any questions or would like to proceed.
+
+### 2. Detection
 
 Check these in order. Skip anything already done:
 
@@ -113,7 +115,7 @@ ls ~/.pi/agent/extensions/dmn-context.ts 2>/dev/null
 cat ~/.claude/settings.json 2>/dev/null | grep snorrio
 ```
 
-### Install
+### 3. Install
 
 If snorrio isn't installed yet:
 
