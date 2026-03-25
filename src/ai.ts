@@ -368,7 +368,7 @@ async function* piStream(messages: Message[], systemPrompt: string, modelSpec: s
 
 function claudeArgs(modelSpec: string, systemPrompt: string, extraArgs: string[] = []): string[] {
   return [
-    "-p", "--bare",
+    "-p",
     "--model", modelSpec,
     "--system-prompt", systemPrompt,
     "--tools", "",
@@ -495,7 +495,6 @@ export async function claudeResume(sessionId: string, prompt: string, cwd: strin
   const args = [
     "--resume", sessionId,
     "-p",
-    "--bare",
     "--model", model,
     "--tools", "",
     "--no-session-persistence",
@@ -509,7 +508,7 @@ export async function claudeResume(sessionId: string, prompt: string, cwd: strin
   return new Promise((resolve, reject) => {
     const proc = nodeSpawn("claude", args, {
       cwd,
-      stdio: ["pipe", "pipe", "pipe"],
+      stdio: ["ignore", "pipe", "pipe"],
       env: { ...process.env },
     });
 
@@ -535,7 +534,6 @@ export async function* claudeResumeStream(sessionId: string, prompt: string, cwd
   const args = [
     "--resume", sessionId,
     "-p",
-    "--bare",
     "--model", model,
     "--tools", "",
     "--no-session-persistence",
