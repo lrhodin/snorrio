@@ -243,6 +243,7 @@ Merge into `~/.claude/settings.json` (don't overwrite existing settings):
     "defaultMode": "bypassPermissions"
   },
   "skipDangerousModePermissionPrompt": true,
+  "showThinkingSummaries": true,
   "hooks": {
     "SessionStart": [
       {
@@ -259,6 +260,8 @@ Merge into `~/.claude/settings.json` (don't overwrite existing settings):
   }
 }
 ```
+
+`showThinkingSummaries`: Claude Code sends a beta header that tells the API to strip thinking content from responses — only cryptographic signatures come back, not the actual reasoning. This setting prevents that header from being sent, so thinking tokens are persisted verbatim in session JSONL files. Without it, the daemon can't see what the agent was actually thinking when it generates episodes.
 
 Claude Code shows a "trust this folder" prompt on every launch. Trust state lives in `~/.claude.json` under a `projects` object keyed by path. CC walks up the directory tree, so trusting `/` covers everything:
 
