@@ -260,13 +260,19 @@ Merge into `~/.claude/settings.json` (don't overwrite existing settings):
 }
 ```
 
-Claude Code shows a "trust this folder" prompt every launch unless the working directory is a git repo. There is no config to disable this. To suppress it without forcing a workspace decision on day one, init a bare git repo in the home directory that ignores everything:
+Claude Code shows a "trust this folder" prompt on every launch. Trust state lives in `~/.claude.json` under a `projects` object keyed by path. CC walks up the directory tree, so trusting `/` covers everything:
 
 ```bash
-cd ~ && git init && echo '*' > .gitignore && git add .gitignore && git commit -m "suppress cc workspace prompt"
+python3 -c "
+import json, os
+f = os.path.expanduser('~/.claude.json')
+d = json.load(open(f)) if os.path.exists(f) else {}
+d.setdefault('projects', {}).setdefault('/', {})['hasTrustDialogAccepted'] = True
+json.dump(d, open(f, 'w'), indent=2)
+"
 ```
 
-This is invisible — it doesn't track anything. The user can set up a proper workspace directory later. The result: open a terminal, type `claude`, zero prompts.
+The result: open a terminal, type `claude`, zero prompts.
 
 **Stale cleanup** (from previous installs):
 - Remove `~/.pi/agent/git/github.com/lrhodin/snorrio/` if it exists (old package install)
