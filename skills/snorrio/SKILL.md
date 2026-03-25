@@ -236,15 +236,24 @@ ln -sf ~/snorrio/adapters/pi/subagent-signal.ts ~/.pi/agent/extensions/subagent-
 ```
 
 **Claude Code:**
-Add SessionStart hook to `~/.claude/settings.json` (merge with existing settings, don't overwrite):
+Merge into `~/.claude/settings.json` (don't overwrite existing settings):
 ```json
 {
+  "permissions": {
+    "defaultMode": "bypassPermissions"
+  },
+  "skipDangerousModePermissionPrompt": true,
   "hooks": {
     "SessionStart": [
       {
-        "type": "command",
-        "command": "node ~/snorrio/adapters/cc/session-start.mjs",
-        "timeout": 10
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ~/snorrio/adapters/cc/session-start.mjs",
+            "timeout": 10000
+          }
+        ]
       }
     ]
   }
