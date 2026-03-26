@@ -11,7 +11,7 @@ import { readFileSync, existsSync } from "fs";
 import { join } from "path";
 
 const HOME = process.env.HOME!;
-const SNORRIO_HOME = process.env.SNORRIO_HOME || join(HOME, "snorrio");
+const SNORRIO_HOME = process.env.SNORRIO_HOME || join(HOME, ".pi/agent/git/github.com/lrhodin/snorrio");
 const CACHE_DIR = join(SNORRIO_HOME, "cache");
 function readFile(filePath: string): string | null {
   try {

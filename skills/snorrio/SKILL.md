@@ -55,22 +55,22 @@ Everything stays on your machine. No cloud, no telemetry.
 
 ## Architecture
 
-Snorrio is a standalone install. A thin pi extension handles context injection.
+Snorrio installs as a pi package. Skills and extensions are auto-discovered.
 
 ```
-~/snorrio/                         # the install
+~/.pi/agent/git/github.com/lrhodin/snorrio/   # pi-managed clone
   src/                             # core
     episode-daemon.ts
     recall-engine.ts
     ai.ts
     session-meta.ts
     context.ts                     # shared context loading
-  skills/                          # shared across all platforms
+  skills/                          # auto-discovered by pi
     recall/  snorrio/  dmn/
     llm-pipe/  subagent/
-  adapters/
-    pi/dmn-context.ts              # pi extension — injects context
-    pi/subagent-signal.ts          # pi extension — subagent signaling
+  extensions/                      # auto-discovered by pi
+    dmn-context.ts                 # context injection + setup detection
+    subagent-signal.ts             # subagent completion signaling
   bin/
     snorrio                        # CLI: flush, status, update
   episodes/                        # episode markdown, by date
@@ -92,37 +92,47 @@ You should never install something you could not explain to your human. Explore 
 Check these in order. Skip anything already done:
 
 ```bash
-# 1. Snorrio installed?
-ls ~/snorrio/src 2>/dev/null
+# 1. Snorrio installed as pi package?
+pi list 2>/dev/null | grep snorrio
 
 # 2. Config exists?
 cat ~/.config/snorrio/config.json 2>/dev/null
 
 # 3. Data directories exist?
-ls ~/snorrio/episodes 2>/dev/null
+ls ~/.pi/agent/git/github.com/lrhodin/snorrio/episodes 2>/dev/null
 
 # 4. Daemon running?
 launchctl list io.snorrio.dmn 2>/dev/null
 
 # 5. CLIs accessible?
 which recall 2>/dev/null && which snorrio 2>/dev/null
-
-# 6. Platform adapter installed?
-ls ~/.pi/agent/extensions/dmn-context.ts 2>/dev/null
 ```
 
 ### 3. Install
 
-If snorrio isn't installed yet:
+If snorrio isn't installed yet, have the user run the install script:
 
 ```bash
-git clone https://github.com/lrhodin/snorrio ~/snorrio
+curl -sSL snorr.io/install | bash
 ```
 
-#### 1. Data directories
+This handles everything: prerequisites (brew, node, pi), package installation, config, CLIs, daemon. If the user has already run it, the script is idempotent.
+
+For manual setup or fixing individual issues, the steps below cover each piece:
+
+#### 1. Package install
 
 ```bash
-mkdir -p ~/snorrio/{episodes,cache/{days,weeks,months,quarters},logs}
+pi install https://github.com/lrhodin/snorrio
+```
+
+This clones the repo to `~/.pi/agent/git/github.com/lrhodin/snorrio/`, registers skills, and discovers extensions automatically.
+
+#### 2. Data directories
+
+```bash
+SNORRIO_HOME=~/.pi/agent/git/github.com/lrhodin/snorrio
+mkdir -p "$SNORRIO_HOME"/{episodes,cache/{days,weeks,months,quarters},logs}
 ```
 
 #### 2. Config file
@@ -142,36 +152,25 @@ EOF
 
 #### 3. CLI tools
 
-Create symlinks/wrappers somewhere on the user's PATH. `~/.local/bin` is conventional but use whatever makes sense for the system. Check `echo $SHELL` and the appropriate rc file to ensure the bin directory is in PATH.
-
 ```bash
+SNORRIO_HOME=~/.pi/agent/git/github.com/lrhodin/snorrio
 mkdir -p ~/.local/bin
 
-# recall
-chmod +x ~/snorrio/src/recall-engine.ts
-ln -sf ~/snorrio/src/recall-engine.ts ~/.local/bin/recall
+chmod +x "$SNORRIO_HOME/src/recall-engine.ts"
+ln -sf "$SNORRIO_HOME/src/recall-engine.ts" ~/.local/bin/recall
 
-# snorrio CLI
-chmod +x ~/snorrio/bin/snorrio
-ln -sf ~/snorrio/bin/snorrio ~/.local/bin/snorrio
+chmod +x "$SNORRIO_HOME/bin/snorrio"
+ln -sf "$SNORRIO_HOME/bin/snorrio" ~/.local/bin/snorrio
 
-# subagent
-chmod +x ~/snorrio/skills/subagent/subagent.mjs
-ln -sf ~/snorrio/skills/subagent/subagent.mjs ~/.local/bin/subagent
-
-# llm (pipe stdin through LLM — wrapper, not symlink)
-cat > ~/.local/bin/llm << 'WRAPPER'
-#!/bin/bash
-exec node ~/snorrio/skills/llm-pipe/llm-pipe.ts "$@"
-WRAPPER
-chmod +x ~/.local/bin/llm
+chmod +x "$SNORRIO_HOME/skills/subagent/subagent.mjs"
+ln -sf "$SNORRIO_HOME/skills/subagent/subagent.mjs" ~/.local/bin/subagent
 ```
 
-Verify: `which recall && which snorrio && which subagent && echo "test" | llm "one word"`
+Ensure `~/.local/bin` is on PATH. Verify: `which recall && which snorrio && which subagent`
 
 #### 4. Daemon (macOS launchd)
 
-Find node: `NODE=$(which node)`, `NODE_DIR=$(dirname $NODE)`
+Find node and set paths: `NODE=$(which node)`, `NODE_DIR=$(dirname $NODE)`, `SNORRIO_HOME=~/.pi/agent/git/github.com/lrhodin/snorrio`
 
 Write `~/Library/LaunchAgents/io.snorrio.dmn.plist`:
 
@@ -217,23 +216,14 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.snorrio.dmn.plist
 
 Verify: `launchctl list io.snorrio.dmn` — PID present means success.
 
-#### 5. Platform adapter
+#### 5. Extensions and skills
 
-**Pi:**
-```bash
-# Context injection
-ln -sf ~/snorrio/adapters/pi/dmn-context.ts ~/.pi/agent/extensions/dmn-context.ts
-
-# Subagent turn-completion signaling
-ln -sf ~/snorrio/adapters/pi/subagent-signal.ts ~/.pi/agent/extensions/subagent-signal.ts
-
-# Add snorrio skills to pi's skill paths (in ~/.pi/agent/settings.json)
-# Add "~/snorrio/skills" to the "skills" array if not already present
-```
+When installed via `pi install`, extensions and skills are auto-discovered from the `extensions/` and `skills/` directories. No manual linking needed.
 
 **Stale cleanup** (from previous installs):
-- Remove `~/.pi/agent/git/github.com/lrhodin/snorrio/` if it exists (old package install)
+- Remove `~/.pi/agent/extensions/dmn-context.ts` if it's a symlink to an old path (e.g., `~/snorrio/adapters/pi/`)
 - Remove `~/.pi/agent/extensions/recall-tool.ts` and `done-command.ts` if they're real files (not symlinks)
+- Remove `~/snorrio/skills` from the `skills` array in `~/.pi/agent/settings.json` if present (package handles this now)
 
 #### 6. Passwordless sudo (optional)
 

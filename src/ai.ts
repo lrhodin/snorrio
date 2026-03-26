@@ -117,7 +117,7 @@ async function getPiAgent() {
 
 // --- Snorrio paths ---
 
-export const SNORRIO_HOME = process.env.SNORRIO_HOME || join(process.env.HOME!, "snorrio");
+export const SNORRIO_HOME = process.env.SNORRIO_HOME || join(process.env.HOME!, ".pi/agent/git/github.com/lrhodin/snorrio");
 
 // --- Config ---
 

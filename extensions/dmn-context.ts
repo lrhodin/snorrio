@@ -7,7 +7,7 @@ import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { execSync } from "node:child_process";
 
 const HOME = process.env.HOME!;
-const SNORRIO_HOME = process.env.SNORRIO_HOME || join(HOME, "snorrio");
+const SNORRIO_HOME = process.env.SNORRIO_HOME || join(HOME, ".pi/agent/git/github.com/lrhodin/snorrio");
 
 // ── Setup detection ──
 // Checks what's working and what isn't. Returns null if everything's fine,
@@ -46,12 +46,12 @@ function checkSetup(): string | null {
   if (daemonRunning) ok.push("daemon running");
   else issues.push("daemon not running — load the snorrio skill for setup instructions");
 
-  // 5. Skills registered
+  // 5. Package installed
   try {
     const settings = JSON.parse(readFileSync(join(HOME, ".pi/agent/settings.json"), "utf8"));
-    const skills: string[] = settings.skills || [];
-    if (skills.some((s: string) => s.includes("snorrio/skills"))) ok.push("skills registered");
-    else issues.push("snorrio skills not in pi settings — add `~/snorrio/skills` to the skills array in ~/.pi/agent/settings.json");
+    const packages: any[] = settings.packages || [];
+    if (packages.some((p: any) => (typeof p === "string" ? p : p.source).includes("snorrio"))) ok.push("package installed");
+    else issues.push("snorrio not installed as pi package — run `pi install https://github.com/lrhodin/snorrio`");
   } catch {
     issues.push("can't read pi settings");
   }

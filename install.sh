@@ -7,7 +7,6 @@ set -euo pipefail
 SNORRIO_HOME="${SNORRIO_HOME:-$HOME/snorrio}"
 CONFIG_DIR="$HOME/.config/snorrio"
 BIN_DIR="$HOME/.local/bin"
-PI_DIR="$HOME/.pi/agent"
 
 main() {
   echo "snorrio — installing..."
@@ -16,12 +15,10 @@ main() {
   install_homebrew
   install_node
   install_pi
-  clone_repo
+  install_snorrio
   create_dirs
   create_config
   install_cli
-  install_pi_extensions
-  register_skills
   install_daemon
   ensure_path
 
@@ -42,7 +39,6 @@ install_homebrew() {
 }
 
 install_node() {
-  # Make sure brew is on PATH even if we just installed it
   if [ -x /opt/homebrew/bin/brew ]; then
     eval "$(/opt/homebrew/bin/brew shellenv)"
   fi
@@ -65,14 +61,18 @@ install_pi() {
 
 # ── Snorrio ──
 
-clone_repo() {
-  if [ -d "$SNORRIO_HOME/.git" ]; then
-    echo "  repo exists, pulling..."
-    git -C "$SNORRIO_HOME" pull --ff-only --quiet 2>/dev/null || true
+install_snorrio() {
+  # pi install handles: clone, skill registration, extension discovery
+  if pi list 2>/dev/null | grep -q snorrio; then
+    echo "  package installed, updating..."
+    pi update https://github.com/lrhodin/snorrio 2>/dev/null || true
   else
-    echo "  cloning..."
-    git clone --quiet https://github.com/lrhodin/snorrio "$SNORRIO_HOME"
+    echo "  installing package..."
+    pi install https://github.com/lrhodin/snorrio
   fi
+
+  # SNORRIO_HOME points to pi's managed clone
+  SNORRIO_HOME="$HOME/.pi/agent/git/github.com/lrhodin/snorrio"
 }
 
 create_dirs() {
@@ -107,47 +107,12 @@ install_cli() {
 
   cat > "$BIN_DIR/llm" << 'WRAPPER'
 #!/bin/bash
-exec node ~/snorrio/skills/llm-pipe/llm-pipe.ts "$@"
+SNORRIO=$(dirname "$(readlink "$HOME/.local/bin/recall")")/..
+exec node "$SNORRIO/skills/llm-pipe/llm-pipe.ts" "$@"
 WRAPPER
   chmod +x "$BIN_DIR/llm"
 
   echo "  installed CLIs"
-}
-
-install_pi_extensions() {
-  mkdir -p "$PI_DIR/extensions"
-
-  ln -sf "$SNORRIO_HOME/adapters/pi/dmn-context.ts" "$PI_DIR/extensions/dmn-context.ts"
-  ln -sf "$SNORRIO_HOME/adapters/pi/subagent-signal.ts" "$PI_DIR/extensions/subagent-signal.ts"
-
-  echo "  linked pi extensions"
-}
-
-register_skills() {
-  local settings="$PI_DIR/settings.json"
-  if [ ! -f "$settings" ]; then
-    mkdir -p "$PI_DIR"
-    cat > "$settings" << EOF
-{
-  "skills": ["~/snorrio/skills"]
-}
-EOF
-    echo "  created pi settings with skills path"
-    return
-  fi
-
-  if grep -q "snorrio/skills" "$settings" 2>/dev/null; then return; fi
-
-  node -e "
-    const fs = require('fs');
-    const s = JSON.parse(fs.readFileSync('$settings', 'utf8'));
-    s.skills = s.skills || [];
-    if (!s.skills.some(p => p.includes('snorrio/skills'))) {
-      s.skills.push('~/snorrio/skills');
-    }
-    fs.writeFileSync('$settings', JSON.stringify(s, null, 2) + '\n');
-  "
-  echo "  registered skills in pi settings"
 }
 
 install_daemon() {
