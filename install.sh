@@ -13,7 +13,9 @@ main() {
   echo "snorrio — installing..."
   echo ""
 
-  check_deps
+  install_homebrew
+  install_node
+  install_pi
   clone_repo
   create_dirs
   create_config
@@ -30,24 +32,38 @@ main() {
   echo ""
 }
 
-check_deps() {
-  if ! command -v node &>/dev/null; then
-    echo "error: node not found. install node >= 22 first."
-    exit 1
-  fi
+# ── Prerequisites ──
 
-  if ! command -v pi &>/dev/null; then
-    echo "error: pi not found. install pi first:"
-    echo "  npm install -g @mariozechner/pi-coding-agent"
-    exit 1
-  fi
-
-  NODE_MAJOR=$(node -e 'console.log(process.versions.node.split(".")[0])')
-  if [ "$NODE_MAJOR" -lt 22 ]; then
-    echo "error: node $NODE_MAJOR found, need >= 22 (for native TypeScript)"
-    exit 1
-  fi
+install_homebrew() {
+  if command -v brew &>/dev/null; then return; fi
+  echo "  installing homebrew..."
+  NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" </dev/null
+  eval "$(/opt/homebrew/bin/brew shellenv)"
 }
+
+install_node() {
+  # Make sure brew is on PATH even if we just installed it
+  if [ -x /opt/homebrew/bin/brew ]; then
+    eval "$(/opt/homebrew/bin/brew shellenv)"
+  fi
+
+  if command -v node &>/dev/null; then
+    NODE_MAJOR=$(node -e 'console.log(process.versions.node.split(".")[0])')
+    if [ "$NODE_MAJOR" -ge 22 ]; then return; fi
+    echo "  node $NODE_MAJOR found, need >= 22. upgrading..."
+  else
+    echo "  installing node..."
+  fi
+  brew install node
+}
+
+install_pi() {
+  if command -v pi &>/dev/null; then return; fi
+  echo "  installing pi..."
+  npm install -g @mariozechner/pi-coding-agent
+}
+
+# ── Snorrio ──
 
 clone_repo() {
   if [ -d "$SNORRIO_HOME/.git" ]; then
@@ -95,7 +111,7 @@ exec node ~/snorrio/skills/llm-pipe/llm-pipe.ts "$@"
 WRAPPER
   chmod +x "$BIN_DIR/llm"
 
-  echo "  installed CLIs: recall, snorrio, subagent, llm"
+  echo "  installed CLIs"
 }
 
 install_pi_extensions() {
@@ -110,7 +126,6 @@ install_pi_extensions() {
 register_skills() {
   local settings="$PI_DIR/settings.json"
   if [ ! -f "$settings" ]; then
-    # pi hasn't been run yet — create minimal settings with skills path
     mkdir -p "$PI_DIR"
     cat > "$settings" << EOF
 {
@@ -121,24 +136,18 @@ EOF
     return
   fi
 
-  # Check if snorrio skills are already registered
-  if grep -q "snorrio/skills" "$settings" 2>/dev/null; then
-    return
-  fi
+  if grep -q "snorrio/skills" "$settings" 2>/dev/null; then return; fi
 
-  # Add snorrio skills path to existing settings
-  if command -v node &>/dev/null; then
-    node -e "
-      const fs = require('fs');
-      const s = JSON.parse(fs.readFileSync('$settings', 'utf8'));
-      s.skills = s.skills || [];
-      if (!s.skills.some(p => p.includes('snorrio/skills'))) {
-        s.skills.push('~/snorrio/skills');
-      }
-      fs.writeFileSync('$settings', JSON.stringify(s, null, 2) + '\n');
-    "
-    echo "  registered skills in pi settings"
-  fi
+  node -e "
+    const fs = require('fs');
+    const s = JSON.parse(fs.readFileSync('$settings', 'utf8'));
+    s.skills = s.skills || [];
+    if (!s.skills.some(p => p.includes('snorrio/skills'))) {
+      s.skills.push('~/snorrio/skills');
+    }
+    fs.writeFileSync('$settings', JSON.stringify(s, null, 2) + '\n');
+  "
+  echo "  registered skills in pi settings"
 }
 
 install_daemon() {
@@ -186,19 +195,15 @@ EOF
   launchctl bootout "gui/$(id -u)/io.snorrio.dmn" 2>/dev/null || true
   launchctl bootstrap "gui/$(id -u)" "$PLIST"
 
-  # Verify
   if launchctl list io.snorrio.dmn &>/dev/null; then
     echo "  daemon started"
   else
-    echo "  warning: daemon failed to start — check logs at $SNORRIO_HOME/logs/"
+    echo "  warning: daemon failed to start — check ~/snorrio/logs/"
   fi
 }
 
 ensure_path() {
-  # Check if ~/.local/bin is in PATH
-  if echo "$PATH" | grep -q "$BIN_DIR"; then
-    return
-  fi
+  if echo "$PATH" | grep -q "$BIN_DIR"; then return; fi
 
   local shell_rc
   case "${SHELL:-/bin/zsh}" in
@@ -207,9 +212,7 @@ ensure_path() {
     *)      shell_rc="$HOME/.profile" ;;
   esac
 
-  if [ -f "$shell_rc" ] && grep -q '.local/bin' "$shell_rc" 2>/dev/null; then
-    return
-  fi
+  if [ -f "$shell_rc" ] && grep -q '.local/bin' "$shell_rc" 2>/dev/null; then return; fi
 
   echo '' >> "$shell_rc"
   echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$shell_rc"
