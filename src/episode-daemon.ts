@@ -211,6 +211,7 @@ const CACHE_Q_DAY = "Tell the story of today — write it as a narrative, not a 
 const CACHE_Q_WEEK = "Write a narrative of this week so far — an essay, not a checklist. What threads are developing, what started or stalled, what's the trajectory? Don't repeat daily details — just what's visible across multiple days. You're the continuity layer across day boundaries — anything in flight that a new day needs to pick up should be here, with enough detail to find the right day. Reference specific dates so the reader can navigate down.";
 const CACHE_Q_MONTH = "Write a narrative of this month so far — an essay, not a checklist. What shifted, what themes emerged or faded, what's shaping the direction? Don't restate weekly details — just what's visible at the monthly level. You're the continuity layer across week boundaries — any active threads a new week needs to carry forward should be here, with enough context to find the right week. Reference specific weeks so the reader can navigate down.";
 const CACHE_Q_QUARTER = "Write a narrative of this quarter so far — an essay, not a checklist. What's the arc, what materialized that wasn't there at the start, what's building? Don't restate monthly details — just what's visible from this altitude. You're the continuity layer across month boundaries — any arcs a new month needs to carry forward should be here, with enough context to find the right month. Reference specific months so the reader can navigate down.";
+const CACHE_Q_YEAR = "Write a narrative of this year so far — an essay, not a checklist. What's the through-line, what transformed, what emerged that wasn't imaginable at the start? Don't restate quarterly details — just what's visible across the full arc of the year. You're the continuity layer across quarter boundaries — any trajectories a new quarter needs to carry forward should be here, with enough context to find the right quarter. Reference specific quarters so the reader can navigate down.";
 
 async function cascadeForDate(dateStr: string) {
   const weekStr = dateToWeek(dateStr);
@@ -251,6 +252,17 @@ async function cascadeForDate(dateStr: string) {
         atomicWrite(join(CACHE_DIR, "quarters", `${quarterStr}.md`), quarterSummary as string);
       }
     } catch (err: any) { log(`  Quarter cache error: ${err.message?.slice(0, 100)}`); }
+  }
+
+  if (lastProcessedMonth && lastProcessedMonth !== monthStr) {
+    const yearStr = monthStr.slice(0, 4);
+    log(`  Month boundary → regenerating year cache: ${yearStr}`);
+    try {
+      const yearSummary = await recall(yearStr, CACHE_Q_YEAR, "opus");
+      if (yearSummary && !yearSummary.startsWith("[recall:")) {
+        atomicWrite(join(CACHE_DIR, "years", `${yearStr}.md`), yearSummary as string);
+      }
+    } catch (err: any) { log(`  Year cache error: ${err.message?.slice(0, 100)}`); }
   }
 
   lastProcessedDate = dateStr;
@@ -372,8 +384,18 @@ async function sweep() {
     } catch (err: any) { log(`    ${q} ✗ ${err.message?.slice(0, 100)}`); }
   }));
 
+  const years = [...new Set(quarters.map(q => q.split("-Q")[0]))].sort();
+  log(`  Rebuilding ${years.length} year caches`);
+  for (const y of years) {
+    try {
+      const summary = await recall(y, CACHE_Q_YEAR, "opus");
+      if (summary && !summary.startsWith("[recall:")) atomicWrite(join(CACHE_DIR, "years", `${y}.md`), summary as string);
+      log(`    ${y} ✓`);
+    } catch (err: any) { log(`    ${y} ✗ ${err.message?.slice(0, 100)}`); }
+  }
+
   globalThis._skipCascade = false;
-  log(`Sweep done: ${count} episodes, ${days.length} days, ${weeks.length} weeks, ${months.length} months, ${quarters.length} quarters`);
+  log(`Sweep done: ${count} episodes, ${days.length} days, ${weeks.length} weeks, ${months.length} months, ${quarters.length} quarters, ${years.length} years`);
 }
 
 // ============================================================================
@@ -595,6 +617,16 @@ async function reprocess(rangeStr: string, depthStr?: string) {
     }
   }
 
+  if (depthLevel <= 5 && rangeLevel >= 5) {
+    log(`  Year: ${range.ref}`);
+    try {
+      const summary = await recall(range.ref, CACHE_Q_YEAR, "opus");
+      if (!summary || summary.startsWith("[recall:")) throw new Error(summary as string);
+      atomicWrite(join(CACHE_DIR, "years", `${range.ref}.md`), summary as string);
+      log(`    ${range.ref} ✓`);
+    } catch (err: any) { log(`    ${range.ref} ✗ ${err.message?.slice(0, 100)}`); }
+  }
+
   log("Reprocess complete.");
 }
 
@@ -679,6 +711,17 @@ function startFlushWatcher() {
               atomicWrite(join(CACHE_DIR, "quarters", `${quarterStr}.md`), quarterSummary as string);
             }
           } catch (err: any) { log(`  [bg] Quarter cache error: ${err.message?.slice(0, 100)}`); }
+        }
+
+        if (lastProcessedMonth && lastProcessedMonth !== monthStr) {
+          const yearStr = monthStr.slice(0, 4);
+          try {
+            log(`  [bg] Regenerating year cache: ${yearStr}`);
+            const yearSummary = await recall(yearStr, CACHE_Q_YEAR, "opus");
+            if (yearSummary && !yearSummary.startsWith("[recall:")) {
+              atomicWrite(join(CACHE_DIR, "years", `${yearStr}.md`), yearSummary as string);
+            }
+          } catch (err: any) { log(`  [bg] Year cache error: ${err.message?.slice(0, 100)}`); }
         }
 
         lastProcessedDate = dateStr as string;

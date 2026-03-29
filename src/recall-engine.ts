@@ -46,12 +46,14 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const WEEK_RE = /^\d{4}-W\d{2}$/;
 const MONTH_RE = /^\d{4}-\d{2}$/;
 const QUARTER_RE = /^\d{4}-Q[1-4]$/;
+const YEAR_RE = /^\d{4}$/;
 
 function refType(ref: string) {
   if (DATE_RE.test(ref)) return "day";
   if (WEEK_RE.test(ref)) return "week";
   if (QUARTER_RE.test(ref)) return "quarter";
   if (MONTH_RE.test(ref)) return "month";
+  if (YEAR_RE.test(ref)) return "year";
   return "session";
 }
 
@@ -91,6 +93,8 @@ function loadTemporalContext(timestamp: Date): string {
     } catch { return null; }
   }
 
+  const year = `${pt.getFullYear()}`;
+
   const sections: string[] = [];
   const dayCtx = readCache("days", today);
   if (dayCtx) sections.push(`### That day (${today})\n${dayCtx}`);
@@ -100,6 +104,8 @@ function loadTemporalContext(timestamp: Date): string {
   if (monthCtx) sections.push(`### That month (${month})\n${monthCtx}`);
   const quarterCtx = readCache("quarters", quarter);
   if (quarterCtx) sections.push(`### That quarter (${quarter})\n${quarterCtx}`);
+  const yearCtx = readCache("years", year);
+  if (yearCtx) sections.push(`### That year (${year})\n${yearCtx}`);
 
   if (sections.length === 0) return "";
   return `\n\n## Temporal context (what was happening when this session ran)\n\n${sections.join("\n\n")}\n`;
@@ -403,6 +409,62 @@ You operate at the highest temporal resolution available. Patterns, trajectories
 }
 
 // ============================================================================
+// YEAR RECALL — load quarter summaries as context
+// ============================================================================
+
+function yearQuarters(yearStr: string) {
+  return [1, 2, 3, 4].map(q => `${yearStr}-Q${q}`);
+}
+
+function quarterHasData(quarterStr: string) {
+  const months = quarterMonths(quarterStr);
+  return months.some(m => monthHasData(m));
+}
+
+async function recallYear(yearStr: string, question: string, modelSpec: string, onChunk?: OnChunk) {
+  const quarters = yearQuarters(yearStr);
+  const quarterSummaries: Array<{ quarter: string; summary: string }> = [];
+
+  for (const quarterStr of quarters) {
+    if (!quarterHasData(quarterStr)) continue;
+
+    const cachePath = join(CACHE_DIR, "quarters", `${quarterStr}.md`);
+    let summary: string;
+
+    if (existsSync(cachePath)) {
+      summary = readFileSync(cachePath, "utf8").trim();
+    } else {
+      summary = await recallQuarter(quarterStr, "Write a narrative of this quarter. What's the arc — what materialized that wasn't there at the start, what's building? Don't restate monthly details — just what's visible from this altitude. Reference specific months so the reader can drill down.", modelSpec) as string;
+      mkdirSync(join(CACHE_DIR, "quarters"), { recursive: true });
+      writeFileSync(cachePath, summary);
+    }
+
+    quarterSummaries.push({ quarter: quarterStr, summary });
+  }
+
+  if (quarterSummaries.length === 0) return `[recall: no data found for ${yearStr}]`;
+
+  const context = quarterSummaries.map(q =>
+    `--- ${q.quarter} ---\n${q.summary}`
+  ).join("\n\n");
+
+  const systemPrompt = `You are a recall agent for ${yearStr}. Your context is quarter-level summaries for each quarter that had activity.
+
+You operate at the highest temporal resolution available — the full year. Arcs, transformations, and emergent themes visible here are invisible at any lower level. Quarter-level detail lives one level down, month and week detail two and three levels down. Name specific quarters, months, or weeks when referencing detail so the caller can drill deeper. If your context doesn't contain enough detail, say which quarter likely has the answer.`;
+
+  const messages = [userMessage(`Question: ${question}\n\n---\n\nContext (quarter summaries for ${yearStr}):\n\n${context}`)];
+  const result = await apiCallStream(messages, systemPrompt, modelSpec, onChunk);
+
+  const cachePath = join(CACHE_DIR, "years", `${yearStr}.md`);
+  if (!existsSync(cachePath) && result && !result.startsWith("[recall:")) {
+    mkdirSync(join(CACHE_DIR, "years"), { recursive: true });
+    writeFileSync(cachePath, result as string);
+  }
+
+  return result;
+}
+
+// ============================================================================
 // API CALL — routes through unified complete()/stream()
 // ============================================================================
 
@@ -448,13 +510,14 @@ export async function recall(ref: string, question: string, modelSpec = "opus", 
   if (type === "week") return recallWeek(ref, question, modelSpec, onChunk);
   if (type === "month") return recallMonth(ref, question, modelSpec, onChunk);
   if (type === "quarter") return recallQuarter(ref, question, modelSpec, onChunk);
+  if (type === "year") return recallYear(ref, question, modelSpec, onChunk);
 
   // Session
   return recallSession(ref, question, modelSpec, { context: options.context, onChunk });
 }
 
 // Expose for episode daemon
-export { loadEpisodes, weekDates, monthWeeks, quarterMonths, weekHasData, monthHasData };
+export { loadEpisodes, weekDates, monthWeeks, quarterMonths, yearQuarters, weekHasData, monthHasData, quarterHasData };
 
 // ============================================================================
 // CLI
@@ -479,7 +542,7 @@ if (process.argv[1]?.includes("recall-engine") || process.argv[1]?.includes("rec
 
   if (args.length < 2) {
     console.error("Usage: recall [--model <model>] [--context] <ref> \"question\"");
-    console.error("  ref: session UUID, .jsonl path, YYYY-MM-DD (day), YYYY-Www (week), YYYY-MM (month), YYYY-QN (quarter)");
+    console.error("  ref: session UUID, .jsonl path, YYYY-MM-DD (day), YYYY-Www (week), YYYY-MM (month), YYYY-QN (quarter), YYYY (year)");
     console.error("  models: haiku, sonnet, opus (default)");
     console.error("  --context: load temporal context from when the session ran (situated witness)");
     process.exit(1);

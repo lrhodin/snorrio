@@ -20,6 +20,7 @@ recall 2026-03-05 "What shipped today?"
 recall 2026-W10 "What was the main thread?"
 recall 2026-03 "What's the trajectory of this month?"
 recall 2026-Q1 "What emerged this quarter?"
+recall 2026 "What's the arc of this year?"
 recall 50690a64 "What beeper commands did you run?"
 ```
 
@@ -31,11 +32,12 @@ recall 50690a64 "What beeper commands did you run?"
 | `YYYY-Www` | Week | Cached day summaries |
 | `YYYY-MM` | Month | Cached week summaries |
 | `YYYY-QN` | Quarter | Cached month summaries |
+| `YYYY` | Year | Cached quarter summaries |
 | UUID prefix | Session | Full session transcript |
 
 ## Navigation pattern
 
-**Always drill down through layers.** Each level only knows about its direct subordinates — a quarter knows months, a month knows weeks, a week knows days, a day knows sessions.
+**Always drill down through layers.** Each level only knows about its direct subordinates — a year knows quarters, a quarter knows months, a month knows weeks, a week knows days, a day knows sessions.
 
 At each level, ask a **locating question** — "which day," "which session" — to find where something lives. The content lives at the bottom. Every hop above that is navigation.
 

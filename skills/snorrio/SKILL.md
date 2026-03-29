@@ -26,6 +26,7 @@ A daemon (`io.snorrio.dmn`) watches session directories. When a session goes qui
 - **Week**: day summaries composed into weekly threads
 - **Month**: week summaries revealing monthly trajectory
 - **Quarter**: month summaries showing the big picture
+- **Year**: quarter summaries showing the full arc
 
 ### Recall
 
@@ -40,6 +41,7 @@ recall <ref> "question"
 | YYYY-Www | Week | `recall 2026-W12 "What was the main thread?"` |
 | YYYY-MM | Month | `recall 2026-03 "What's the trajectory?"` |
 | YYYY-QN | Quarter | `recall 2026-Q1 "What emerged?"` |
+| YYYY | Year | `recall 2026 "What's the arc?"` |
 
 Options: `--model <alias>` (default: opus), `--context` (situated witness mode).
 
@@ -132,7 +134,7 @@ This clones the repo to `~/.pi/agent/git/github.com/lrhodin/snorrio/`, registers
 
 ```bash
 SNORRIO_HOME=~/.pi/agent/git/github.com/lrhodin/snorrio
-mkdir -p "$SNORRIO_HOME"/{episodes,cache/{days,weeks,months,quarters},logs}
+mkdir -p "$SNORRIO_HOME"/{episodes,cache/{days,weeks,months,quarters,years},logs}
 ```
 
 #### 2. Config file

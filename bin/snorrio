@@ -11,7 +11,7 @@ import { join } from "path";
 import { execSync } from "child_process";
 
 const HOME = process.env.HOME;
-const SNORRIO_HOME = process.env.SNORRIO_HOME || join(HOME, "snorrio");
+const SNORRIO_HOME = process.env.SNORRIO_HOME || join(HOME, ".pi/agent/git/github.com/lrhodin/snorrio");
 const LOG_DIR = join(SNORRIO_HOME, "logs");
 const FLUSH_TRIGGER = join(SNORRIO_HOME, "flush");
 

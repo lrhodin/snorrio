@@ -55,8 +55,9 @@ export function getDateRefs() {
   const month = today.slice(0, 7);
   const q = Math.floor(pt.getMonth() / 3) + 1;
   const quarter = `${pt.getFullYear()}-Q${q}`;
+  const year = `${pt.getFullYear()}`;
 
-  return { today, yesterday, week, month, quarter };
+  return { today, yesterday, week, month, quarter, year };
 }
 
 /**
@@ -74,12 +75,14 @@ export function loadContext(): string | null {
   const weekCtx = readCache("weeks", refs.week);
   const monthCtx = readCache("months", refs.month);
   const quarterCtx = readCache("quarters", refs.quarter);
+  const yearCtx = readCache("years", refs.year);
 
   if (todayCtx) temporal.push(`### Today\n${todayCtx}`);
   if (!todayCtx && yesterdayCtx) temporal.push(`### Yesterday (${refs.yesterday})\n${yesterdayCtx}`);
   if (weekCtx) temporal.push(`### This week\n${weekCtx}`);
   if (monthCtx) temporal.push(`### This month\n${monthCtx}`);
   if (quarterCtx) temporal.push(`### This quarter\n${quarterCtx}`);
+  if (yearCtx) temporal.push(`### This year\n${yearCtx}`);
 
   if (temporal.length > 0) {
     sections.push(`## Current state\n<generated ${refs.today}>\n\n${temporal.join("\n\n")}`);
