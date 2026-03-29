@@ -45,7 +45,7 @@ export function getDateRefs() {
   yd.setDate(yd.getDate() - 1);
   const yesterday = `${yd.getFullYear()}-${String(yd.getMonth() + 1).padStart(2, "0")}-${String(yd.getDate()).padStart(2, "0")}`;
 
-  const dayOfYear = Math.floor((pt.getTime() - new Date(pt.getFullYear(), 0, 1).getTime()) / 86400000) + 1;
+  const dayOfYear = Math.floor((Date.UTC(pt.getFullYear(), pt.getMonth(), pt.getDate()) - Date.UTC(pt.getFullYear(), 0, 1)) / 86400000) + 1;
   const dow = pt.getDay() || 7;
   const wn = Math.floor((dayOfYear - dow + 10) / 7);
   let wy = pt.getFullYear();

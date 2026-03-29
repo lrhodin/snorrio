@@ -181,7 +181,7 @@ async function generateEpisode(filePath: string) {
 
 function dateToWeek(dateStr: string) {
   const dt = new Date(dateStr + "T12:00:00Z");
-  const dayOfYear = Math.floor(((dt as any) - (new Date(dt.getFullYear(), 0, 1) as any)) / 86400000) + 1;
+  const dayOfYear = Math.floor((Date.UTC(dt.getFullYear(), dt.getMonth(), dt.getDate()) - Date.UTC(dt.getFullYear(), 0, 1)) / 86400000) + 1;
   const dow = dt.getDay() || 7;
   const wn = Math.floor((dayOfYear - dow + 10) / 7);
   let wy = dt.getFullYear();

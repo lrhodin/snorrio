@@ -75,7 +75,7 @@ function loadTemporalContext(timestamp: Date): string {
 
   const today = `${pt.getFullYear()}-${String(pt.getMonth() + 1).padStart(2, "0")}-${String(pt.getDate()).padStart(2, "0")}`;
 
-  const dayOfYear = Math.floor((pt.getTime() - new Date(pt.getFullYear(), 0, 1).getTime()) / 86400000) + 1;
+  const dayOfYear = Math.floor((Date.UTC(pt.getFullYear(), pt.getMonth(), pt.getDate()) - Date.UTC(pt.getFullYear(), 0, 1)) / 86400000) + 1;
   const dow = pt.getDay() || 7;
   const wn = Math.floor((dayOfYear - dow + 10) / 7);
   let wy = pt.getFullYear();
@@ -289,7 +289,7 @@ function monthWeeks(monthStr: string) {
   const weeks = new Set<string>();
   const d = new Date(year, month - 1, 1);
   while (d <= lastDay) {
-    const dayOfYear = Math.floor(((d as any) - (new Date(d.getFullYear(), 0, 1) as any)) / 86400000) + 1;
+    const dayOfYear = Math.floor((Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) - Date.UTC(d.getFullYear(), 0, 1)) / 86400000) + 1;
     const dow = d.getDay() || 7;
     const wn = Math.floor((dayOfYear - dow + 10) / 7);
     let wy = d.getFullYear();
