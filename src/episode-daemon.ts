@@ -11,10 +11,9 @@
 //
 // Cache lifecycle:
 //   New episode → regenerate day + week caches (atomic write)
-//   Day locks (first episode of new day) → regenerate month cache
-//   Week locks (first episode of new week) → regenerate quarter cache
-//   Month locks (first episode of new month) → regenerate year cache
+//   Day boundary (first episode of new day) → regenerate month, quarter, year
 //   All writes are atomic (tmp + rename). No gap where cache is missing.
+//   Higher caches are never more than ~24 hours stale.
 //
 // Data:
 //   $SNORRIO_HOME/episodes/YYYY-MM-DD/<session-id>.md
@@ -78,8 +77,6 @@ const timers = new Map();
 const inflight = new Set();
 
 let lastProcessedDate: string | null = null;
-let lastProcessedWeek: string | null = null;
-let lastProcessedMonth: string | null = null;
 
 const LOG_DIR = join(SNORRIO_HOME, "logs");
 mkdirSync(LOG_DIR, { recursive: true });
@@ -234,40 +231,36 @@ async function cascadeForDate(dateStr: string) {
   } catch (err: any) { log(`  Week cache error: ${err.message?.slice(0, 100)}`); }
 
   if (lastProcessedDate && lastProcessedDate !== dateStr) {
-    log(`  Day boundary → regenerating month cache: ${monthStr}`);
+    const quarterStr = monthToQuarter(monthStr);
+    const yearStr = monthStr.slice(0, 4);
+
+    log(`  Day boundary → regenerating month, quarter, year caches`);
     try {
       const monthSummary = await recall(monthStr, CACHE_Q_MONTH, "opus");
       if (monthSummary && !monthSummary.startsWith("[recall:")) {
         atomicWrite(join(CACHE_DIR, "months", `${monthStr}.md`), monthSummary as string);
       }
-    } catch (err: any) { log(`  Month cache error: ${err.message?.slice(0, 100)}`); }
-  }
+      log(`    month ${monthStr} ✓`);
+    } catch (err: any) { log(`    month ${monthStr} ✗ ${err.message?.slice(0, 100)}`); }
 
-  if (lastProcessedWeek && lastProcessedWeek !== weekStr) {
-    const quarterStr = monthToQuarter(monthStr);
-    log(`  Week boundary → regenerating quarter cache: ${quarterStr}`);
     try {
       const quarterSummary = await recall(quarterStr, CACHE_Q_QUARTER, "opus");
       if (quarterSummary && !quarterSummary.startsWith("[recall:")) {
         atomicWrite(join(CACHE_DIR, "quarters", `${quarterStr}.md`), quarterSummary as string);
       }
-    } catch (err: any) { log(`  Quarter cache error: ${err.message?.slice(0, 100)}`); }
-  }
+      log(`    quarter ${quarterStr} ✓`);
+    } catch (err: any) { log(`    quarter ${quarterStr} ✗ ${err.message?.slice(0, 100)}`); }
 
-  if (lastProcessedMonth && lastProcessedMonth !== monthStr) {
-    const yearStr = monthStr.slice(0, 4);
-    log(`  Month boundary → regenerating year cache: ${yearStr}`);
     try {
       const yearSummary = await recall(yearStr, CACHE_Q_YEAR, "opus");
       if (yearSummary && !yearSummary.startsWith("[recall:")) {
         atomicWrite(join(CACHE_DIR, "years", `${yearStr}.md`), yearSummary as string);
       }
-    } catch (err: any) { log(`  Year cache error: ${err.message?.slice(0, 100)}`); }
+      log(`    year ${yearStr} ✓`);
+    } catch (err: any) { log(`    year ${yearStr} ✗ ${err.message?.slice(0, 100)}`); }
   }
 
   lastProcessedDate = dateStr;
-  lastProcessedWeek = weekStr;
-  lastProcessedMonth = monthStr;
 }
 
 // ============================================================================
@@ -702,31 +695,37 @@ function startFlushWatcher() {
           } catch (err: any) { log(`  [bg] Month cache error: ${err.message?.slice(0, 100)}`); }
         }
 
-        if (lastProcessedWeek && lastProcessedWeek !== weekStr) {
+        if (lastProcessedDate && lastProcessedDate !== dateStr) {
           const quarterStr = monthToQuarter(monthStr);
+          const yearStr = monthStr.slice(0, 4);
+
           try {
-            log(`  [bg] Regenerating quarter cache: ${quarterStr}`);
+            log(`  [bg] Day boundary → regenerating month, quarter, year`);
+            const monthSummary = await recall(monthStr, CACHE_Q_MONTH, "opus");
+            if (monthSummary && !monthSummary.startsWith("[recall:")) {
+              atomicWrite(join(CACHE_DIR, "months", `${monthStr}.md`), monthSummary as string);
+            }
+            log(`    [bg] month ${monthStr} ✓`);
+          } catch (err: any) { log(`    [bg] month ✗ ${err.message?.slice(0, 100)}`); }
+
+          try {
             const quarterSummary = await recall(quarterStr, CACHE_Q_QUARTER, "opus");
             if (quarterSummary && !quarterSummary.startsWith("[recall:")) {
               atomicWrite(join(CACHE_DIR, "quarters", `${quarterStr}.md`), quarterSummary as string);
             }
-          } catch (err: any) { log(`  [bg] Quarter cache error: ${err.message?.slice(0, 100)}`); }
-        }
+            log(`    [bg] quarter ${quarterStr} ✓`);
+          } catch (err: any) { log(`    [bg] quarter ✗ ${err.message?.slice(0, 100)}`); }
 
-        if (lastProcessedMonth && lastProcessedMonth !== monthStr) {
-          const yearStr = monthStr.slice(0, 4);
           try {
-            log(`  [bg] Regenerating year cache: ${yearStr}`);
             const yearSummary = await recall(yearStr, CACHE_Q_YEAR, "opus");
             if (yearSummary && !yearSummary.startsWith("[recall:")) {
               atomicWrite(join(CACHE_DIR, "years", `${yearStr}.md`), yearSummary as string);
             }
-          } catch (err: any) { log(`  [bg] Year cache error: ${err.message?.slice(0, 100)}`); }
+            log(`    [bg] year ${yearStr} ✓`);
+          } catch (err: any) { log(`    [bg] year ✗ ${err.message?.slice(0, 100)}`); }
         }
 
         lastProcessedDate = dateStr as string;
-        lastProcessedWeek = weekStr;
-        lastProcessedMonth = monthStr;
       }
       log("  [bg] Background cascade complete");
     })().catch(err => log(`Background cascade error: ${err.message}`));
