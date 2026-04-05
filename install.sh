@@ -76,7 +76,7 @@ install_snorrio() {
 }
 
 create_dirs() {
-  mkdir -p "$SNORRIO_HOME"/{episodes,cache/{days,weeks,months,quarters},logs}
+  mkdir -p "$SNORRIO_HOME"/{episodes,cache/{days,weeks,months,quarters,years},logs}
 }
 
 create_config() {
