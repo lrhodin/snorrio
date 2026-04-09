@@ -309,13 +309,13 @@ async function sweep() {
   log("Sweep starting...");
   globalThis._skipCascade = true;
   const sessions = metaAllSessions();
-  let count = 0, skip = 0, fail = 0, noAssistant = 0;
+  let count = 0, skip = 0, fail = 0;
   const CONCURRENCY = parseInt(process.env.REPROCESS_CONCURRENCY || "8");
   const touchedDays = new Set<string>();
 
   const todo: SessionInfo[] = [];
   for (const s of sessions) {
-    if (!metaHasAssistant(s.path)) { noAssistant++; continue; }
+    if (!metaHasAssistant(s.path)) continue;
     const { start, end } = metaTimestamps(s.path);
     const dateStr = toDateStr(end || start || new Date().toISOString());
     const epPath = join(EPISODES_DIR, dateStr, `${s.id}.md`);
@@ -327,7 +327,7 @@ async function sweep() {
     }
     todo.push(s);
   }
-  log(`  ${todo.length} sessions need episodes, ${skip} current, ${noAssistant} no-assistant (concurrency: ${CONCURRENCY})`);
+  log(`  ${todo.length} need episodes, ${skip} current`);
 
   const pool = new Set<Promise<void>>();
   for (const s of todo) {
@@ -345,7 +345,7 @@ async function sweep() {
     pool.add(p);
   }
   await Promise.all(pool);
-  log(`  Episodes: ${count} new, ${skip} current, ${fail} failed, ${noAssistant} no-assistant`);
+  log(`  Episodes: ${count} new, ${skip} current${fail ? `, ${fail} failed` : ""}`);
 
   if (touchedDays.size === 0) { log("Sweep done: nothing new"); globalThis._skipCascade = false; return; }
 
