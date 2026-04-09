@@ -91,10 +91,10 @@ if (cmd === "flush") {
     const doneMatches = text.match(/  Done: /g);
     if (doneMatches) episodesDone += doneMatches.length;
 
-    const summary = text.match(/Flush: (\d+) processed, (\d+) skipped, (\d+) failed/);
+    const summary = text.match(/Flush: (\d+) processed, (\d+) failed/);
     if (summary) {
       const processed = Number(summary[1]);
-      const failed = Number(summary[3]);
+      const failed = Number(summary[2]);
       let msg = `\r✓ ${processed} episode${processed !== 1 ? "s" : ""}`;
       if (failed > 0) msg += ` (${failed} failed)`;
       msg += " — caches updating in background";
