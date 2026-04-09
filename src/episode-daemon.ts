@@ -134,8 +134,19 @@ async function generateEpisode(filePath: string) {
   const sessionEntries = entries.filter((e: any) => e.type !== "session");
 
   let ctx: any;
-  try { ctx = buildSessionContext(sessionEntries); }
-  catch (err: any) {
+  try {
+    ctx = buildSessionContext(sessionEntries);
+    if (!ctx.messages.length) {
+      // Default leaf may be a branch (e.g. model_change) that misses the conversation.
+      // Find the last message entry and use it as explicit leaf.
+      for (let i = sessionEntries.length - 1; i >= 0; i--) {
+        if (sessionEntries[i].type === "message") {
+          ctx = buildSessionContext(sessionEntries, sessionEntries[i].id);
+          break;
+        }
+      }
+    }
+  } catch (err: any) {
     log(`  Context failed ${id.slice(0, 8)}: ${err.message?.slice(0, 200)}`);
     return null;
   }
@@ -468,8 +479,17 @@ async function reprocess(rangeStr: string, depthStr?: string) {
         const entries = loadEntriesFromFile(s.path);
         const sessionEntries = entries.filter((e: any) => e.type !== "session");
         let ctx: any;
-        try { ctx = buildSessionContext(sessionEntries); }
-        catch (err: any) { log(`    Context failed ${s.id.slice(0,8)}: ${err.message?.slice(0,100)}`); fail++; return; }
+        try {
+          ctx = buildSessionContext(sessionEntries);
+          if (!ctx.messages.length) {
+            for (let i = sessionEntries.length - 1; i >= 0; i--) {
+              if (sessionEntries[i].type === "message") {
+                ctx = buildSessionContext(sessionEntries, sessionEntries[i].id);
+                break;
+              }
+            }
+          }
+        } catch (err: any) { log(`    Context failed ${s.id.slice(0,8)}: ${err.message?.slice(0,100)}`); fail++; return; }
         if (!ctx.messages.length) { skip++; return; }
 
         const messages = [...ctx.messages, userMessage(EPISODE_PROMPT)];
