@@ -31,7 +31,7 @@ import {
 } from "fs";
 import { join, basename } from "path";
 import { hostname as osHostname } from "os";
-import { complete, getText, userMessage, SNORRIO_HOME, piRoot, getTimezone } from "./ai.ts";
+import { complete, getText, userMessage, SNORRIO_HOME, piRoot, getTimezone, CONFIG_PATH } from "./ai.ts";
 import { recall } from "./recall-engine.ts";
 import {
   sessionIdFromPath, sessionIdFromEntries,
@@ -61,7 +61,7 @@ const TZ = getTimezone();
 
 function getMachine() {
   try {
-    const cfg = JSON.parse(readFileSync(join(HOME, ".config/snorrio/config.json"), "utf8"));
+    const cfg = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
     if (cfg.machine) return cfg.machine;
   } catch {}
   return osHostname().replace(/\.local$/, "").toLowerCase();

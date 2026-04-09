@@ -2,12 +2,15 @@
 // All temporal logic lives in src/context.ts. This is the pi glue.
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { execSync } from "node:child_process";
 
 const HOME = process.env.HOME!;
-const SNORRIO_HOME = process.env.SNORRIO_HOME || join(HOME, ".pi/agent/git/github.com/lrhodin/snorrio");
+const PKG_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+const SNORRIO_HOME = process.env.SNORRIO_HOME || join(HOME, "snorrio");
+const CONFIG_PATH = join(SNORRIO_HOME, "config", "config.json");
 
 // ── Setup detection ──
 // Checks what's working and what isn't. Returns null if everything's fine,
@@ -16,13 +19,22 @@ function checkSetup(): string | null {
   const issues: string[] = [];
   const ok: string[] = [];
 
+  const legacyPaths: string[] = [];
+  if (existsSync(join(HOME, ".snorrio"))) legacyPaths.push("~/.snorrio");
+  if (existsSync(join(HOME, ".config", "snorrio", "config.json"))) legacyPaths.push("~/.config/snorrio/config.json");
+  for (const path of ["episodes", "cache", "logs"]) {
+    if (existsSync(join(PKG_ROOT, path))) legacyPaths.push(`package:${path}`);
+  }
+  if (legacyPaths.length > 0) {
+    issues.push(`legacy snorrio layout detected (${legacyPaths.join(", ")}) — migrate to ~/snorrio before continuing`);
+  }
+
   // 1. Config
-  const configPath = join(HOME, ".config/snorrio/config.json");
-  if (existsSync(configPath)) ok.push("config exists");
-  else issues.push("missing config: run `mkdir -p ~/.config/snorrio && echo '{\"model\":\"opus\",\"timezone\":null,\"tools\":{}}' > ~/.config/snorrio/config.json`");
+  if (existsSync(CONFIG_PATH)) ok.push("config exists");
+  else issues.push("missing config: create ~/snorrio/config/config.json");
 
   // 2. Data directories
-  const dirs = ["episodes", "cache/days", "cache/weeks", "cache/months", "cache/quarters", "logs"];
+  const dirs = ["episodes", "cache/days", "cache/weeks", "cache/months", "cache/quarters", "cache/years", "logs", "config"];
   const missingDirs = dirs.filter(d => !existsSync(join(SNORRIO_HOME, d)));
   if (missingDirs.length === 0) ok.push("data dirs exist");
   else issues.push(`missing directories: run \`mkdir -p ~/snorrio/{${missingDirs.join(",")}}\``);
@@ -77,7 +89,7 @@ function checkSetup(): string | null {
 
 function getTimezone(): string {
   try {
-    const cfg = JSON.parse(readFileSync(join(HOME, ".config/snorrio/config.json"), "utf8"));
+    const cfg = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
     return cfg.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
   } catch {
     return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
@@ -114,7 +126,7 @@ export default function (pi: ExtensionAPI) {
   const tz = getTimezone();
 
   pi.on("before_agent_start", async (event) => {
-    const { loadContext, getDateRefs } = await import(join(SNORRIO_HOME, "src", "context.ts"));
+    const { loadContext, getDateRefs } = await import(join(PKG_ROOT, "src", "context.ts"));
 
     let prompt = event.systemPrompt;
 

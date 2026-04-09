@@ -60,7 +60,7 @@ Everything stays on your machine. No cloud, no telemetry.
 Snorrio installs as a pi package. Skills and extensions are auto-discovered.
 
 ```
-~/.pi/agent/git/github.com/lrhodin/snorrio/   # pi-managed clone
+~/.pi/agent/git/github.com/lrhodin/snorrio/   # pi-managed clone (code only)
   src/                             # core
     episode-daemon.ts
     recall-engine.ts
@@ -75,12 +75,13 @@ Snorrio installs as a pi package. Skills and extensions are auto-discovered.
     subagent-signal.ts             # subagent completion signaling
   bin/
     snorrio                        # CLI: flush, status, update
+
+~/snorrio/                         # mutable data only
   episodes/                        # episode markdown, by date
   cache/                           # temporal summaries
   logs/                            # daemon logs
-
-~/.config/snorrio/
-  config.json                      # model preferences, timezone
+  config/
+    config.json                    # model preferences, timezone
 ```
 
 ## Setup
@@ -98,10 +99,10 @@ Check these in order. Skip anything already done:
 pi list 2>/dev/null | grep snorrio
 
 # 2. Config exists?
-cat ~/.config/snorrio/config.json 2>/dev/null
+cat ~/snorrio/config/config.json 2>/dev/null
 
 # 3. Data directories exist?
-ls ~/.pi/agent/git/github.com/lrhodin/snorrio/episodes 2>/dev/null
+ls ~/snorrio/episodes 2>/dev/null
 
 # 4. Daemon running?
 launchctl list io.snorrio.dmn 2>/dev/null
@@ -133,15 +134,15 @@ This clones the repo to `~/.pi/agent/git/github.com/lrhodin/snorrio/`, registers
 #### 2. Data directories
 
 ```bash
-SNORRIO_HOME=~/.pi/agent/git/github.com/lrhodin/snorrio
-mkdir -p "$SNORRIO_HOME"/{episodes,cache/{days,weeks,months,quarters,years},logs}
+SNORRIO_HOME=~/snorrio
+mkdir -p "$SNORRIO_HOME"/{episodes,cache/{days,weeks,months,quarters,years},logs,config}
 ```
 
 #### 2. Config file
 
 ```bash
-mkdir -p ~/.config/snorrio
-cat > ~/.config/snorrio/config.json << 'EOF'
+mkdir -p ~/snorrio/config
+cat > ~/snorrio/config/config.json << 'EOF'
 {
   "model": "opus",
   "timezone": null,
@@ -155,24 +156,24 @@ EOF
 #### 3. CLI tools
 
 ```bash
-SNORRIO_HOME=~/.pi/agent/git/github.com/lrhodin/snorrio
+PACKAGE_DIR=~/.pi/agent/git/github.com/lrhodin/snorrio
 mkdir -p ~/.local/bin
 
-chmod +x "$SNORRIO_HOME/src/recall-engine.ts"
-ln -sf "$SNORRIO_HOME/src/recall-engine.ts" ~/.local/bin/recall
+chmod +x "$PACKAGE_DIR/src/recall-engine.ts"
+ln -sf "$PACKAGE_DIR/src/recall-engine.ts" ~/.local/bin/recall
 
-chmod +x "$SNORRIO_HOME/bin/snorrio"
-ln -sf "$SNORRIO_HOME/bin/snorrio" ~/.local/bin/snorrio
+chmod +x "$PACKAGE_DIR/bin/snorrio"
+ln -sf "$PACKAGE_DIR/bin/snorrio" ~/.local/bin/snorrio
 
-chmod +x "$SNORRIO_HOME/skills/subagent/subagent.mjs"
-ln -sf "$SNORRIO_HOME/skills/subagent/subagent.mjs" ~/.local/bin/subagent
+chmod +x "$PACKAGE_DIR/skills/subagent/subagent.mjs"
+ln -sf "$PACKAGE_DIR/skills/subagent/subagent.mjs" ~/.local/bin/subagent
 ```
 
 Ensure `~/.local/bin` is on PATH. Verify: `which recall && which snorrio && which subagent`
 
 #### 4. Daemon (macOS launchd)
 
-Find node and set paths: `NODE=$(which node)`, `NODE_DIR=$(dirname $NODE)`, `SNORRIO_HOME=~/.pi/agent/git/github.com/lrhodin/snorrio`
+Find node and set paths: `NODE=$(which node)`, `NODE_DIR=$(dirname $NODE)`, `PACKAGE_DIR=~/.pi/agent/git/github.com/lrhodin/snorrio`, `SNORRIO_HOME=~/snorrio`
 
 Write `~/Library/LaunchAgents/io.snorrio.dmn.plist`:
 
@@ -186,7 +187,7 @@ Write `~/Library/LaunchAgents/io.snorrio.dmn.plist`:
   <key>ProgramArguments</key>
   <array>
     <string>NODE</string>
-    <string>HOME_DIR/snorrio/src/episode-daemon.ts</string>
+    <string>PACKAGE_DIR/src/episode-daemon.ts</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
@@ -209,7 +210,7 @@ Write `~/Library/LaunchAgents/io.snorrio.dmn.plist`:
 </plist>
 ```
 
-Replace NODE, NODE_DIR, HOME_DIR with actual values.
+Replace NODE, NODE_DIR, PACKAGE_DIR, HOME_DIR with actual values.
 
 ```bash
 launchctl bootout gui/$(id -u)/io.snorrio.dmn 2>/dev/null || true

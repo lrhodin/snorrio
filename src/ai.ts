@@ -2,16 +2,17 @@
 // Snorrio AI — LLM calls via pi-ai.
 //
 // Uses pi's model resolution, auth, and provider system.
-// Config override via ~/.config/snorrio/config.json.
+// Config override via ~/snorrio/config/config.json.
 //
 // Usage:
 //   import { complete, stream } from "./ai.ts";
 //   const result = await complete(messages, systemPrompt, modelSpec);
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
-import { join } from "path";
+import { join, dirname } from "path";
 import { execSync } from "child_process";
 import { realpathSync } from "fs";
+import { fileURLToPath } from "url";
 
 // --- Types ---
 
@@ -117,13 +118,16 @@ async function getPiAgent() {
 
 // --- Snorrio paths ---
 
-export const SNORRIO_HOME = process.env.SNORRIO_HOME || join(process.env.HOME!, ".pi/agent/git/github.com/lrhodin/snorrio");
+export const HOME = process.env.HOME!;
+const FILE_PATH = fileURLToPath(import.meta.url);
+export const PKG_ROOT = join(dirname(FILE_PATH), "..");
+export const SNORRIO_HOME = process.env.SNORRIO_HOME || join(HOME, "snorrio");
 
 // --- Config ---
 
-const CONFIG_DIR = join(process.env.HOME!, ".config/snorrio");
-const CONFIG_PATH = join(CONFIG_DIR, "config.json");
-const PI_SETTINGS_PATH = join(process.env.HOME!, ".pi/agent/settings.json");
+export const CONFIG_DIR = join(SNORRIO_HOME, "config");
+export const CONFIG_PATH = join(CONFIG_DIR, "config.json");
+const PI_SETTINGS_PATH = join(HOME, ".pi/agent/settings.json");
 
 const MODEL_ALIASES: Record<string, Record<string, string>> = {
   opus: {
@@ -242,7 +246,7 @@ export async function resolveModel(spec: string | null = null, toolName: string 
     const provider = piSettings.defaultProvider;
     const modelId = piSettings.defaultModel;
     if (!provider || !modelId) {
-      throw new Error("No model specified and no pi default configured. Run pi and select a model, or set model in ~/.config/snorrio/config.json");
+      throw new Error("No model specified and no pi default configured. Run pi and select a model, or set model in ~/snorrio/config/config.json");
     }
     model = piAi.getModel(provider, modelId);
     if (!model) throw new Error(`Pi's default model not found: ${provider}/${modelId}`);

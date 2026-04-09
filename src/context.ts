@@ -7,12 +7,12 @@
 //   import { loadContext } from "./context.ts";
 //   const text = loadContext();  // string or null
 
-import { readFileSync, existsSync } from "fs";
+import { readFileSync } from "fs";
 import { join } from "path";
+import { SNORRIO_HOME, CONFIG_PATH } from "./ai.ts";
 
-const HOME = process.env.HOME!;
-const SNORRIO_HOME = process.env.SNORRIO_HOME || join(HOME, ".pi/agent/git/github.com/lrhodin/snorrio");
 const CACHE_DIR = join(SNORRIO_HOME, "cache");
+
 function readFile(filePath: string): string | null {
   try {
     return readFileSync(filePath, "utf8").trim() || null;
@@ -27,8 +27,7 @@ function readCache(level: string, key: string): string | null {
 
 function loadTimezone(): string {
   try {
-    const configPath = join(HOME, ".config/snorrio/config.json");
-    const config = JSON.parse(readFileSync(configPath, "utf8"));
+    const config = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
     return config.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
   } catch {
     return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";

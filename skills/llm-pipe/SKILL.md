@@ -29,7 +29,7 @@ llm "prompt" claude-sonnet-4-6
 
 ## Models
 
-Default is whatever's configured in `~/.config/snorrio/config.json`. Don't override it. Override with second argument only if the user asks:
+Default is whatever's configured in `~/snorrio/config/config.json`. Don't override it. Override with second argument only if the user asks:
 - `haiku`, `sonnet`, `opus` — aliases
 - `provider/model-id` — explicit
 

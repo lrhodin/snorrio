@@ -6,12 +6,15 @@
 //   snorrio status         Show daemon and system status
 //   snorrio update         Pull latest and restart daemon
 
-import { existsSync, readFileSync, writeFileSync, statSync, openSync, readSync, closeSync } from "fs";
-import { join } from "path";
+import { existsSync, statSync, writeFileSync, openSync, readSync, closeSync } from "fs";
+import { join, dirname } from "path";
+import { fileURLToPath } from "url";
 import { execSync } from "child_process";
 
 const HOME = process.env.HOME;
-const SNORRIO_HOME = process.env.SNORRIO_HOME || join(HOME, ".pi/agent/git/github.com/lrhodin/snorrio");
+const PKG_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+const SNORRIO_HOME = process.env.SNORRIO_HOME || join(HOME, "snorrio");
+const CONFIG_PATH = join(SNORRIO_HOME, "config", "config.json");
 const LOG_DIR = join(SNORRIO_HOME, "logs");
 const FLUSH_TRIGGER = join(SNORRIO_HOME, "flush");
 
@@ -108,6 +111,9 @@ if (cmd === "flush") {
   } catch {}
   console.log(`Daemon:    ${daemonPid ? `running (PID ${daemonPid})` : "not running"}`);
 
+  // Data home
+  console.log(`Data home: ${SNORRIO_HOME}`);
+
   // Episodes
   const episodesDir = join(SNORRIO_HOME, "episodes");
   const today = new Date().toISOString().slice(0, 10);
@@ -125,20 +131,19 @@ if (cmd === "flush") {
   console.log(`Episodes:  ${todayCount} today, ${totalDays} days total`);
 
   // Config
-  const configPath = join(HOME, ".config/snorrio/config.json");
-  console.log(`Config:    ${existsSync(configPath) ? configPath : "missing"}`);
+  console.log(`Config:    ${existsSync(CONFIG_PATH) ? CONFIG_PATH : "missing"}`);
 
   // Git status
   try {
-    const branch = execSync("git rev-parse --abbrev-ref HEAD", { cwd: SNORRIO_HOME, encoding: "utf8" }).trim();
-    const hash = execSync("git rev-parse --short HEAD", { cwd: SNORRIO_HOME, encoding: "utf8" }).trim();
+    const branch = execSync("git rev-parse --abbrev-ref HEAD", { cwd: PKG_ROOT, encoding: "utf8" }).trim();
+    const hash = execSync("git rev-parse --short HEAD", { cwd: PKG_ROOT, encoding: "utf8" }).trim();
     console.log(`Version:   ${branch}@${hash}`);
   } catch {}
 
 } else if (cmd === "update") {
   try {
     console.log("Pulling latest...");
-    execSync("git pull --ff-only", { cwd: SNORRIO_HOME, stdio: "inherit" });
+    execSync("git pull --ff-only", { cwd: PKG_ROOT, stdio: "inherit" });
 
     console.log("Restarting daemon...");
     const uid = execSync("id -u", { encoding: "utf8" }).trim();

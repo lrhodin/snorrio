@@ -4,14 +4,16 @@ set -euo pipefail
 # snorrio installer
 # curl -sSL snorr.io/install | bash
 
-SNORRIO_HOME="${SNORRIO_HOME:-$HOME/snorrio}"
-CONFIG_DIR="$HOME/.config/snorrio"
+DATA_HOME="${SNORRIO_HOME:-$HOME/snorrio}"
+CONFIG_DIR="$DATA_HOME/config"
 BIN_DIR="$HOME/.local/bin"
+PACKAGE_DIR="$HOME/.pi/agent/git/github.com/lrhodin/snorrio"
 
 main() {
   echo "snorrio — installing..."
   echo ""
 
+  detect_legacy_layout
   install_homebrew
   install_node
   install_pi
@@ -27,6 +29,41 @@ main() {
   echo ""
   echo "  launch pi to get started"
   echo ""
+}
+
+# ── Legacy layout detection ──
+
+detect_legacy_layout() {
+  local found=()
+
+  [ -e "$HOME/.snorrio" ] && found+=("$HOME/.snorrio")
+  [ -e "$HOME/.config/snorrio/config.json" ] && found+=("$HOME/.config/snorrio/config.json")
+
+  for path in episodes cache logs flush; do
+    [ -e "$PACKAGE_DIR/$path" ] && found+=("$PACKAGE_DIR/$path")
+  done
+
+  if [ ${#found[@]} -eq 0 ]; then
+    return
+  fi
+
+  echo "legacy snorrio layout detected:"
+  for path in "${found[@]}"; do
+    echo "  - $path"
+  done
+  echo ""
+  echo "snorrio now expects mutable state in:"
+  echo "  $DATA_HOME"
+  echo ""
+  echo "Do the one-time manual migration first, then rerun install."
+  echo ""
+  echo "Target layout:"
+  echo "  $DATA_HOME/episodes"
+  echo "  $DATA_HOME/cache"
+  echo "  $DATA_HOME/logs"
+  echo "  $CONFIG_DIR/config.json"
+  echo ""
+  exit 1
 }
 
 # ── Prerequisites ──
@@ -70,13 +107,10 @@ install_snorrio() {
     echo "  installing package..."
     pi install https://github.com/lrhodin/snorrio
   fi
-
-  # SNORRIO_HOME points to pi's managed clone
-  SNORRIO_HOME="$HOME/.pi/agent/git/github.com/lrhodin/snorrio"
 }
 
 create_dirs() {
-  mkdir -p "$SNORRIO_HOME"/{episodes,cache/{days,weeks,months,quarters,years},logs}
+  mkdir -p "$DATA_HOME"/{episodes,cache/{days,weeks,months,quarters,years},logs,config}
 }
 
 create_config() {
@@ -96,14 +130,14 @@ EOF
 install_cli() {
   mkdir -p "$BIN_DIR"
 
-  ln -sf "$SNORRIO_HOME/src/recall-engine.ts" "$BIN_DIR/recall"
-  chmod +x "$SNORRIO_HOME/src/recall-engine.ts"
+  ln -sf "$PACKAGE_DIR/src/recall-engine.ts" "$BIN_DIR/recall"
+  chmod +x "$PACKAGE_DIR/src/recall-engine.ts"
 
-  ln -sf "$SNORRIO_HOME/bin/snorrio" "$BIN_DIR/snorrio"
-  chmod +x "$SNORRIO_HOME/bin/snorrio"
+  ln -sf "$PACKAGE_DIR/bin/snorrio" "$BIN_DIR/snorrio"
+  chmod +x "$PACKAGE_DIR/bin/snorrio"
 
-  ln -sf "$SNORRIO_HOME/skills/subagent/subagent.mjs" "$BIN_DIR/subagent"
-  chmod +x "$SNORRIO_HOME/skills/subagent/subagent.mjs"
+  ln -sf "$PACKAGE_DIR/skills/subagent/subagent.mjs" "$BIN_DIR/subagent"
+  chmod +x "$PACKAGE_DIR/skills/subagent/subagent.mjs"
 
   cat > "$BIN_DIR/llm" << 'WRAPPER'
 #!/bin/bash
@@ -134,7 +168,7 @@ install_daemon() {
   <key>ProgramArguments</key>
   <array>
     <string>${NODE_BIN}</string>
-    <string>${SNORRIO_HOME}/src/episode-daemon.ts</string>
+    <string>${PACKAGE_DIR}/src/episode-daemon.ts</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
@@ -143,16 +177,16 @@ install_daemon() {
     <key>PATH</key>
     <string>${BIN_DIR}:${NODE_DIR}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
     <key>SNORRIO_HOME</key>
-    <string>${SNORRIO_HOME}</string>
+    <string>${DATA_HOME}</string>
   </dict>
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>
   <true/>
   <key>StandardOutPath</key>
-  <string>${SNORRIO_HOME}/logs/daemon-stdout.log</string>
+  <string>${DATA_HOME}/logs/daemon-stdout.log</string>
   <key>StandardErrorPath</key>
-  <string>${SNORRIO_HOME}/logs/daemon-stderr.log</string>
+  <string>${DATA_HOME}/logs/daemon-stderr.log</string>
 </dict>
 </plist>
 EOF
@@ -163,7 +197,7 @@ EOF
   if launchctl list io.snorrio.dmn &>/dev/null; then
     echo "  daemon started"
   else
-    echo "  warning: daemon failed to start — check ~/snorrio/logs/"
+    echo "  warning: daemon failed to start — check $DATA_HOME/logs/"
   fi
 }
 
