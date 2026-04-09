@@ -76,7 +76,7 @@ function buildFrontmatter(origin: string, sourcePath: string, timestamp: string)
 const timers = new Map();
 const inflight = new Set();
 
-let lastProcessedDate: string | null = null;
+
 
 const LOG_DIR = join(SNORRIO_HOME, "logs");
 mkdirSync(LOG_DIR, { recursive: true });
@@ -220,8 +220,11 @@ const CACHE_Q_QUARTER = "Write a narrative of this quarter so far — an essay, 
 const CACHE_Q_YEAR = "Write a narrative of this year so far. Every thread surfaced at the quarter level should be carried here — not restated in full, but faithfully represented at a higher level of abstraction so any of them can be drilled into. No thread should disappear between quarters and the year.\n\nGround every claim in what the quarter summaries actually say. If a quarter doesn't state an outcome, don't infer one. Say what's known and what's unresolved — never fabricate a status.\n\nWhat's the through-line? What transformed? What emerged that wasn't imaginable at the start? What's visible from this altitude that no single quarter can see? Surface cross-quarter arcs and tensions, but stay anchored to what actually happened. Reference specific quarters so the reader can navigate down.";
 
 async function cascadeForDate(dateStr: string) {
-  await batchCascade(new Set([dateStr]), lastProcessedDate === dateStr ? "week" : "day");
-  lastProcessedDate = dateStr;
+  // Only called in live mode (debounce path) — _skipCascade gates this.
+  // Historical paths (flush/sweep/reprocess) handle their own cascading.
+  // In live mode, always full cascade: episodes arrive one at a time
+  // with 4.5min debounce, so there's no thrashing risk.
+  await batchCascade(new Set([dateStr]), "day");
 }
 
 // Rebuild caches for a set of refs at one level.
