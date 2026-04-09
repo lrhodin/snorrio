@@ -1,7 +1,11 @@
 node_modules/
+package-lock.json
+
+# Mutable data belongs in ~/snorrio, not in the repo
 episodes/
 cache/
 logs/
+
+# Legacy artifacts
 identity.md
-package-lock.json
 identity.md.bak

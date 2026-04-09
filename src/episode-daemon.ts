@@ -211,56 +211,55 @@ const CACHE_Q_QUARTER = "Write a narrative of this quarter so far — an essay, 
 const CACHE_Q_YEAR = "Write a narrative of this year so far. Every thread surfaced at the quarter level should be carried here — not restated in full, but faithfully represented at a higher level of abstraction so any of them can be drilled into. No thread should disappear between quarters and the year.\n\nGround every claim in what the quarter summaries actually say. If a quarter doesn't state an outcome, don't infer one. Say what's known and what's unresolved — never fabricate a status.\n\nWhat's the through-line? What transformed? What emerged that wasn't imaginable at the start? What's visible from this altitude that no single quarter can see? Surface cross-quarter arcs and tensions, but stay anchored to what actually happened. Reference specific quarters so the reader can navigate down.";
 
 async function cascadeForDate(dateStr: string) {
-  const weekStr = dateToWeek(dateStr);
-  const monthStr = dateStr.slice(0, 7);
-
-  try {
-    log(`  Regenerating day cache: ${dateStr}`);
-    const daySummary = await recall(dateStr, CACHE_Q_DAY, "opus");
-    if (daySummary && !daySummary.startsWith("[recall:")) {
-      atomicWrite(join(CACHE_DIR, "days", `${dateStr}.md`), daySummary as string);
-    }
-  } catch (err: any) { log(`  Day cache error: ${err.message?.slice(0, 100)}`); }
-
-  try {
-    log(`  Regenerating week cache: ${weekStr}`);
-    const weekSummary = await recall(weekStr, CACHE_Q_WEEK, "opus");
-    if (weekSummary && !weekSummary.startsWith("[recall:")) {
-      atomicWrite(join(CACHE_DIR, "weeks", `${weekStr}.md`), weekSummary as string);
-    }
-  } catch (err: any) { log(`  Week cache error: ${err.message?.slice(0, 100)}`); }
-
-  if (lastProcessedDate && lastProcessedDate !== dateStr) {
-    const quarterStr = monthToQuarter(monthStr);
-    const yearStr = monthStr.slice(0, 4);
-
-    log(`  Day boundary → regenerating month, quarter, year caches`);
-    try {
-      const monthSummary = await recall(monthStr, CACHE_Q_MONTH, "opus");
-      if (monthSummary && !monthSummary.startsWith("[recall:")) {
-        atomicWrite(join(CACHE_DIR, "months", `${monthStr}.md`), monthSummary as string);
-      }
-      log(`    month ${monthStr} ✓`);
-    } catch (err: any) { log(`    month ${monthStr} ✗ ${err.message?.slice(0, 100)}`); }
-
-    try {
-      const quarterSummary = await recall(quarterStr, CACHE_Q_QUARTER, "opus");
-      if (quarterSummary && !quarterSummary.startsWith("[recall:")) {
-        atomicWrite(join(CACHE_DIR, "quarters", `${quarterStr}.md`), quarterSummary as string);
-      }
-      log(`    quarter ${quarterStr} ✓`);
-    } catch (err: any) { log(`    quarter ${quarterStr} ✗ ${err.message?.slice(0, 100)}`); }
-
-    try {
-      const yearSummary = await recall(yearStr, CACHE_Q_YEAR, "opus");
-      if (yearSummary && !yearSummary.startsWith("[recall:")) {
-        atomicWrite(join(CACHE_DIR, "years", `${yearStr}.md`), yearSummary as string);
-      }
-      log(`    year ${yearStr} ✓`);
-    } catch (err: any) { log(`    year ${yearStr} ✗ ${err.message?.slice(0, 100)}`); }
-  }
-
+  await batchCascade(new Set([dateStr]), lastProcessedDate === dateStr ? "week" : "day");
   lastProcessedDate = dateStr;
+}
+
+// Rebuild caches for a set of refs at one level.
+// Parallel for day/week/month, sequential for quarter/year.
+async function rebuildCache(level: string, refs: string[], prefix: string = "") {
+  const prompts: Record<string, string> = {
+    day: CACHE_Q_DAY, week: CACHE_Q_WEEK, month: CACHE_Q_MONTH,
+    quarter: CACHE_Q_QUARTER, year: CACHE_Q_YEAR,
+  };
+  const dirs: Record<string, string> = {
+    day: "days", week: "weeks", month: "months",
+    quarter: "quarters", year: "years",
+  };
+  if (refs.length === 0) return;
+  log(`${prefix}  Rebuilding ${refs.length} ${level} cache${refs.length > 1 ? "s" : ""}`);
+
+  const rebuild = async (ref: string) => {
+    try {
+      const summary = await recall(ref, prompts[level], "opus");
+      if (summary && !summary.startsWith("[recall:"))
+        atomicWrite(join(CACHE_DIR, dirs[level], `${ref}.md`), summary as string);
+      log(`${prefix}    ${ref} ✓`);
+    } catch (err: any) { log(`${prefix}    ${ref} ✗ ${err.message?.slice(0, 100)}`); }
+  };
+
+  if (["day", "week", "month"].includes(level)) await Promise.all(refs.map(rebuild));
+  else for (const ref of refs) await rebuild(ref);
+}
+
+// Derive unique refs at each level from a set of dates, rebuild bottom-up.
+// `from` controls the starting level: "day" | "week" | "month" | "quarter" | "year".
+async function batchCascade(dates: Set<string>, from: string = "day", prefix: string = "") {
+  const levels: [string, (ds: string[]) => string[]][] = [
+    ["day",     (ds) => ds],
+    ["week",    (ds) => [...new Set(ds.map(d => dateToWeek(d)))]],
+    ["month",   (ds) => [...new Set(ds.map(d => d.slice(0, 7)))]],
+    ["quarter", (ds) => [...new Set(ds.map(d => monthToQuarter(d.slice(0, 7))))]],
+    ["year",    (ds) => [...new Set(ds.map(d => d.slice(0, 4)))]],
+  ];
+
+  const fromIdx = levels.findIndex(([name]) => name === from);
+  const allDates = [...dates].sort();
+
+  for (let i = fromIdx; i < levels.length; i++) {
+    const [name, extractRefs] = levels[i];
+    await rebuildCache(name, extractRefs(allDates).sort(), prefix);
+  }
 }
 
 // ============================================================================
@@ -337,58 +336,10 @@ async function sweep() {
 
   if (touchedDays.size === 0) { log("Sweep done: nothing new"); globalThis._skipCascade = false; return; }
 
-  const days = [...touchedDays].sort();
-  log(`  Rebuilding ${days.length} day caches (parallel)`);
-  await Promise.all(days.map(async (d) => {
-    try {
-      const summary = await recall(d, CACHE_Q_DAY, "opus");
-      if (summary && !summary.startsWith("[recall:")) atomicWrite(join(CACHE_DIR, "days", `${d}.md`), summary as string);
-      log(`    ${d} ✓`);
-    } catch (err: any) { log(`    ${d} ✗ ${err.message?.slice(0, 100)}`); }
-  }));
-
-  const weeks = [...new Set(days.map(d => dateToWeek(d)))].sort();
-  log(`  Rebuilding ${weeks.length} week caches (parallel)`);
-  await Promise.all(weeks.map(async (w) => {
-    try {
-      const summary = await recall(w, CACHE_Q_WEEK, "opus");
-      if (summary && !summary.startsWith("[recall:")) atomicWrite(join(CACHE_DIR, "weeks", `${w}.md`), summary as string);
-      log(`    ${w} ✓`);
-    } catch (err: any) { log(`    ${w} ✗ ${err.message?.slice(0, 100)}`); }
-  }));
-
-  const months = [...new Set(days.map(d => d.slice(0, 7)))].sort();
-  log(`  Rebuilding ${months.length} month caches (parallel)`);
-  await Promise.all(months.map(async (m) => {
-    try {
-      const summary = await recall(m, CACHE_Q_MONTH, "opus");
-      if (summary && !summary.startsWith("[recall:")) atomicWrite(join(CACHE_DIR, "months", `${m}.md`), summary as string);
-      log(`    ${m} ✓`);
-    } catch (err: any) { log(`    ${m} ✗ ${err.message?.slice(0, 100)}`); }
-  }));
-
-  const quarters = [...new Set(months.map(m => { const [y, mm] = m.split("-"); return `${y}-Q${Math.ceil(parseInt(mm) / 3)}`; }))].sort();
-  log(`  Rebuilding ${quarters.length} quarter caches (parallel)`);
-  await Promise.all(quarters.map(async (q) => {
-    try {
-      const summary = await recall(q, CACHE_Q_QUARTER, "opus");
-      if (summary && !summary.startsWith("[recall:")) atomicWrite(join(CACHE_DIR, "quarters", `${q}.md`), summary as string);
-      log(`    ${q} ✓`);
-    } catch (err: any) { log(`    ${q} ✗ ${err.message?.slice(0, 100)}`); }
-  }));
-
-  const years = [...new Set(quarters.map(q => q.split("-Q")[0]))].sort();
-  log(`  Rebuilding ${years.length} year caches`);
-  for (const y of years) {
-    try {
-      const summary = await recall(y, CACHE_Q_YEAR, "opus");
-      if (summary && !summary.startsWith("[recall:")) atomicWrite(join(CACHE_DIR, "years", `${y}.md`), summary as string);
-      log(`    ${y} ✓`);
-    } catch (err: any) { log(`    ${y} ✗ ${err.message?.slice(0, 100)}`); }
-  }
+  await batchCascade(touchedDays as Set<string>, "day");
 
   globalThis._skipCascade = false;
-  log(`Sweep done: ${count} episodes, ${days.length} days, ${weeks.length} weeks, ${months.length} months, ${quarters.length} quarters, ${years.length} years`);
+  log(`Sweep done: ${count} episodes, ${touchedDays.size} days touched`);
 }
 
 // ============================================================================
@@ -550,15 +501,7 @@ async function reprocess(rangeStr: string, depthStr?: string) {
   }
 
   if (depthLevel <= 1) {
-    log(`  Days: ${activeDays.length} (parallel)`);
-    await Promise.all(activeDays.map(async (d) => {
-      try {
-        const summary = await recall(d, CACHE_Q_DAY, "opus");
-        if (!summary || summary.startsWith("[recall:")) throw new Error(summary as string);
-        atomicWrite(join(CACHE_DIR, "days", `${d}.md`), summary as string);
-        log(`    ${d} ✓`);
-      } catch (err: any) { log(`    ${d} ✗ ${err.message?.slice(0, 100)}`); }
-    }));
+    await rebuildCache("day", activeDays);
   }
 
   if (depthLevel <= 2 && rangeLevel >= 2) {
@@ -567,16 +510,7 @@ async function reprocess(rangeStr: string, depthStr?: string) {
       : range.type === "quarter" ? quarterMonthsLocal(range.ref).flatMap(m => monthWeeksLocal(m))
       : range.type === "year" ? yearQuarters(range.ref).flatMap(q => quarterMonthsLocal(q).flatMap(m => monthWeeksLocal(m)))
       : [];
-    const uniqueWeeks = [...new Set(weeks)].sort();
-    log(`  Weeks: ${uniqueWeeks.length} (parallel)`);
-    await Promise.all(uniqueWeeks.map(async (w) => {
-      try {
-        const summary = await recall(w, CACHE_Q_WEEK, "opus");
-        if (!summary || summary.startsWith("[recall:")) throw new Error(summary as string);
-        atomicWrite(join(CACHE_DIR, "weeks", `${w}.md`), summary as string);
-        log(`    ${w} ✓`);
-      } catch (err: any) { log(`    ${w} ✗ ${err.message?.slice(0, 100)}`); }
-    }));
+    await rebuildCache("week", [...new Set(weeks)].sort());
   }
 
   if (depthLevel <= 3 && rangeLevel >= 3) {
@@ -584,40 +518,18 @@ async function reprocess(rangeStr: string, depthStr?: string) {
       : range.type === "quarter" ? quarterMonthsLocal(range.ref)
       : range.type === "year" ? yearQuarters(range.ref).flatMap(q => quarterMonthsLocal(q))
       : [];
-    log(`  Months: ${months.length} (parallel)`);
-    await Promise.all(months.map(async (m) => {
-      try {
-        const summary = await recall(m, CACHE_Q_MONTH, "opus");
-        if (!summary || summary.startsWith("[recall:")) throw new Error(summary as string);
-        atomicWrite(join(CACHE_DIR, "months", `${m}.md`), summary as string);
-        log(`    ${m} ✓`);
-      } catch (err: any) { log(`    ${m} ✗ ${err.message?.slice(0, 100)}`); }
-    }));
+    await rebuildCache("month", months);
   }
 
   if (depthLevel <= 4 && rangeLevel >= 4) {
     const quarters = range.type === "quarter" ? [range.ref]
       : range.type === "year" ? yearQuarters(range.ref)
       : [];
-    log(`  Quarters: ${quarters.length}`);
-    for (const q of quarters) {
-      try {
-        const summary = await recall(q, CACHE_Q_QUARTER, "opus");
-        if (!summary || summary.startsWith("[recall:")) throw new Error(summary as string);
-        atomicWrite(join(CACHE_DIR, "quarters", `${q}.md`), summary as string);
-        log(`    ${q} ✓`);
-      } catch (err: any) { log(`    ${q} ✗ ${err.message?.slice(0, 100)}`); }
-    }
+    await rebuildCache("quarter", quarters);
   }
 
   if (depthLevel <= 5 && rangeLevel >= 5) {
-    log(`  Year: ${range.ref}`);
-    try {
-      const summary = await recall(range.ref, CACHE_Q_YEAR, "opus");
-      if (!summary || summary.startsWith("[recall:")) throw new Error(summary as string);
-      atomicWrite(join(CACHE_DIR, "years", `${range.ref}.md`), summary as string);
-      log(`    ${range.ref} ✓`);
-    } catch (err: any) { log(`    ${range.ref} ✗ ${err.message?.slice(0, 100)}`); }
+    await rebuildCache("year", [range.ref]);
   }
 
   log("Reprocess complete.");
@@ -671,62 +583,9 @@ function startFlushWatcher() {
     // Emit summary — /done stops waiting here
     log(`Flush: ${processed} processed, ${pending.length - processed - failed} skipped, ${failed} failed`);
 
-    // Phase 3: Background cascade (week/month/quarter)
+    // Phase 3: Background cascade — deduplicated
     (async () => {
-      for (const dateStr of dates) {
-        const weekStr = dateToWeek(dateStr as string);
-        const monthStr = (dateStr as string).slice(0, 7);
-
-        try {
-          log(`  [bg] Regenerating week cache: ${weekStr}`);
-          const weekSummary = await recall(weekStr, CACHE_Q_WEEK, "opus");
-          if (weekSummary && !weekSummary.startsWith("[recall:")) {
-            atomicWrite(join(CACHE_DIR, "weeks", `${weekStr}.md`), weekSummary as string);
-          }
-        } catch (err: any) { log(`  [bg] Week cache error: ${err.message?.slice(0, 100)}`); }
-
-        if (lastProcessedDate && lastProcessedDate !== dateStr) {
-          try {
-            log(`  [bg] Regenerating month cache: ${monthStr}`);
-            const monthSummary = await recall(monthStr, CACHE_Q_MONTH, "opus");
-            if (monthSummary && !monthSummary.startsWith("[recall:")) {
-              atomicWrite(join(CACHE_DIR, "months", `${monthStr}.md`), monthSummary as string);
-            }
-          } catch (err: any) { log(`  [bg] Month cache error: ${err.message?.slice(0, 100)}`); }
-        }
-
-        if (lastProcessedDate && lastProcessedDate !== dateStr) {
-          const quarterStr = monthToQuarter(monthStr);
-          const yearStr = monthStr.slice(0, 4);
-
-          try {
-            log(`  [bg] Day boundary → regenerating month, quarter, year`);
-            const monthSummary = await recall(monthStr, CACHE_Q_MONTH, "opus");
-            if (monthSummary && !monthSummary.startsWith("[recall:")) {
-              atomicWrite(join(CACHE_DIR, "months", `${monthStr}.md`), monthSummary as string);
-            }
-            log(`    [bg] month ${monthStr} ✓`);
-          } catch (err: any) { log(`    [bg] month ✗ ${err.message?.slice(0, 100)}`); }
-
-          try {
-            const quarterSummary = await recall(quarterStr, CACHE_Q_QUARTER, "opus");
-            if (quarterSummary && !quarterSummary.startsWith("[recall:")) {
-              atomicWrite(join(CACHE_DIR, "quarters", `${quarterStr}.md`), quarterSummary as string);
-            }
-            log(`    [bg] quarter ${quarterStr} ✓`);
-          } catch (err: any) { log(`    [bg] quarter ✗ ${err.message?.slice(0, 100)}`); }
-
-          try {
-            const yearSummary = await recall(yearStr, CACHE_Q_YEAR, "opus");
-            if (yearSummary && !yearSummary.startsWith("[recall:")) {
-              atomicWrite(join(CACHE_DIR, "years", `${yearStr}.md`), yearSummary as string);
-            }
-            log(`    [bg] year ${yearStr} ✓`);
-          } catch (err: any) { log(`    [bg] year ✗ ${err.message?.slice(0, 100)}`); }
-        }
-
-        lastProcessedDate = dateStr as string;
-      }
+      await batchCascade(dates as Set<string>, "week", "[bg]");
       log("  [bg] Background cascade complete");
     })().catch(err => log(`Background cascade error: ${err.message}`));
   }, 1000);
