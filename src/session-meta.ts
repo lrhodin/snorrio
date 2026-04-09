@@ -140,7 +140,7 @@ function walkAll(dir: string, out: SessionInfo[]) {
     for (const item of readdirSync(dir, { withFileTypes: true })) {
       const full = join(dir, item.name);
       if (item.isDirectory()) {
-        walkAll(full, platform, out);
+        walkAll(full, out);
       } else if (item.name.endsWith(".jsonl")) {
         const id = sessionIdFromPath(full);
         if (id) out.push({ path: full, id });

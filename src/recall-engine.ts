@@ -450,7 +450,11 @@ async function recallYear(yearStr: string, question: string, modelSpec: string, 
 
   const systemPrompt = `You are a recall agent for ${yearStr}. Your context is quarter-level summaries for each quarter that had activity.
 
-You operate at the highest temporal resolution available — the full year. Arcs, transformations, and emergent themes visible here are invisible at any lower level. Quarter-level detail lives one level down, month and week detail two and three levels down. Name specific quarters, months, or weeks when referencing detail so the caller can drill deeper. If your context doesn't contain enough detail, say which quarter likely has the answer.`;
+You operate at the highest temporal resolution available — the full year. Arcs, transformations, and emergent themes visible here are invisible at any lower level. Quarter-level detail lives one level down, month and week detail two and three levels down.
+
+Every thread present in the quarter summaries is real and must be representable from this level. Do not drop threads. Do not infer outcomes that aren't stated — if something is unresolved in the quarters, it's unresolved here. Never fabricate facts.
+
+Name specific quarters, months, or weeks when referencing detail so the caller can drill deeper. If your context doesn't contain enough detail, say which quarter likely has the answer.`;
 
   const messages = [userMessage(`Question: ${question}\n\n---\n\nContext (quarter summaries for ${yearStr}):\n\n${context}`)];
   const result = await apiCallStream(messages, systemPrompt, modelSpec, onChunk);

@@ -6,6 +6,12 @@ description: Query past sessions and temporal summaries by reviving them with fu
 
 Query past sessions and temporal summaries. Recall revives past context and answers questions from first-person experience.
 
+## Before you recall
+
+**Check your context first.** Your system prompt already contains temporal caches — today, this week, this month, this quarter, this year. Read them before calling any tool. The answer, or at least the right starting point, is often already in your context. Grep and recall are expensive; attention is free.
+
+When recall IS needed, use your temporal context to pick the right entry point. Don't guess dates — your caches tell you which week or month a thread lived in.
+
 ## When to use recall
 
 If it happened in a past session and isn't saved as a file, recall is how you find it. Start at the temporal level that covers the time range and drill down.
@@ -70,6 +76,10 @@ recall 50690a64 "What was the exact Chrome launch command?"
 ```
 
 Each hop takes ~1-2s. Three hops to exact detail in under 5 seconds.
+
+## Timeout
+
+Recall invokes an LLM under the hood. **Always use a minimum 120-second timeout** (or omit timeout entirely). If you set it too short and it aborts, you lose all the work and have to re-run.
 
 ## Model selection
 
