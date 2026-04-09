@@ -35,7 +35,7 @@ import { complete, getText, userMessage, SNORRIO_HOME, piRoot, getTimezone, CONF
 import { recall } from "./recall-engine.ts";
 import {
   sessionIdFromPath, sessionIdFromEntries,
-  sessionTimestamps as metaTimestamps, hasAssistantMessage as metaHasAssistant,
+  sessionTimestamps as metaTimestamps,
   allSessions as metaAllSessions, type SessionInfo,
 } from "./session-meta.ts";
 
@@ -121,8 +121,6 @@ const EPISODE_PROMPT = "Write a journal entry for this session.\n\nRespond in pl
 async function generateEpisode(filePath: string) {
   const id = sessionIdFromEntries(filePath);
   if (!id) { log(`  No session ID: ${basename(filePath)}`); return null; }
-
-  if (!metaHasAssistant(filePath)) return null;
 
   const { start, end } = metaTimestamps(filePath);
   const dateStr = toDateStr(end || start || new Date().toISOString());
@@ -309,25 +307,24 @@ async function sweep() {
   log("Sweep starting...");
   globalThis._skipCascade = true;
   const sessions = metaAllSessions();
-  let count = 0, skip = 0, fail = 0;
+  let ok = 0, exists = 0, fail = 0;
   const CONCURRENCY = parseInt(process.env.REPROCESS_CONCURRENCY || "8");
   const touchedDays = new Set<string>();
 
   const todo: SessionInfo[] = [];
   for (const s of sessions) {
-    if (!metaHasAssistant(s.path)) continue;
     const { start, end } = metaTimestamps(s.path);
     const dateStr = toDateStr(end || start || new Date().toISOString());
     const epPath = join(EPISODES_DIR, dateStr, `${s.id}.md`);
     if (existsSync(epPath)) {
       const sessionMtime = statSync(s.path).mtimeMs;
       const episodeMtime = statSync(epPath).mtimeMs;
-      if (sessionMtime <= episodeMtime) { skip++; continue; }
+      if (sessionMtime <= episodeMtime) { exists++; continue; }
       log(`  Stale episode: ${s.id.slice(0, 8)} (session newer by ${Math.round((sessionMtime - episodeMtime) / 1000)}s)`);
     }
     todo.push(s);
   }
-  log(`  ${todo.length} need episodes, ${skip} current`);
+  log(`  ${todo.length} need episodes, ${exists} exist`);
 
   const pool = new Set<Promise<void>>();
   for (const s of todo) {
@@ -335,7 +332,7 @@ async function sweep() {
     const p = (async () => {
       try {
         const r = await generateEpisode(s.path);
-        if (r) { count++; touchedDays.add(r.dateStr); }
+        if (r) { ok++; touchedDays.add(r.dateStr); }
         else { fail++; }
       } catch (err: any) {
         fail++;
@@ -345,14 +342,14 @@ async function sweep() {
     pool.add(p);
   }
   await Promise.all(pool);
-  log(`  Episodes: ${count} new, ${skip} current${fail ? `, ${fail} failed` : ""}`);
+  log(`  Episodes: ${ok} ok, ${exists} exist${fail ? `, ${fail} error` : ""}`);
 
   if (touchedDays.size === 0) { log("Sweep done: nothing new"); globalThis._skipCascade = false; return; }
 
   await batchCascade(touchedDays as Set<string>, "day");
 
   globalThis._skipCascade = false;
-  log(`Sweep done: ${count} episodes, ${touchedDays.size} days touched`);
+  log(`Sweep done: ${ok} episodes, ${touchedDays.size} days touched`);
 }
 
 // ============================================================================
@@ -433,7 +430,6 @@ function sessionsForDays(days: string[]) {
   const sessions = metaAllSessions();
   const matched: SessionInfo[] = [];
   for (const s of sessions) {
-    if (!metaHasAssistant(s.path)) continue;
     const { start, end } = metaTimestamps(s.path);
     const dateStr = toDateStr(end || start || new Date().toISOString());
     if (daySet.has(dateStr)) matched.push(s);
@@ -469,8 +465,6 @@ async function reprocess(rangeStr: string, depthStr?: string) {
 
     async function processEpisode(s: SessionInfo) {
       try {
-        if (!metaHasAssistant(s.path)) { skip++; return; }
-
         const { start, end } = metaTimestamps(s.path);
         const dateStr = toDateStr(end || start || new Date().toISOString());
         log(`    ${s.id.slice(0, 8)} (${dateStr}) started`);
