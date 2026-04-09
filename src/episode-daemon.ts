@@ -251,6 +251,91 @@ async function rebuildCache(level: string, refs: string[], prefix: string = "") 
   else for (const ref of refs) await rebuild(ref);
 }
 
+// Walk the cache tree bottom-up, rebuilding anything where a child is newer than its parent.
+// Runs independently of what episodes were just generated — catches incomplete cascades.
+async function validateCaches(prefix: string = "") {
+  const dirs: Record<string, string> = {
+    day: "days", week: "weeks", month: "months", quarter: "quarters", year: "years",
+  };
+  const cachePath = (level: string, ref: string) => join(CACHE_DIR, dirs[level], `${ref}.md`);
+  const mtime = (p: string) => { try { return statSync(p).mtimeMs; } catch { return 0; } };
+
+  // Collect all day caches
+  const dayDir = join(CACHE_DIR, "days");
+  let allDays: string[] = [];
+  try { allDays = readdirSync(dayDir).filter(f => f.endsWith(".md")).map(f => f.replace(".md", "")).sort(); } catch {}
+  if (!allDays.length) return;
+
+  // Check weeks: any week where a day cache is newer?
+  const weekDays = new Map<string, string[]>();
+  for (const d of allDays) {
+    const w = dateToWeek(d);
+    if (!weekDays.has(w)) weekDays.set(w, []);
+    weekDays.get(w)!.push(d);
+  }
+  const staleWeeks: string[] = [];
+  for (const [week, days] of weekDays) {
+    const wt = mtime(cachePath("week", week));
+    if (days.some(d => mtime(cachePath("day", d)) > wt)) staleWeeks.push(week);
+  }
+  if (staleWeeks.length) await rebuildCache("week", staleWeeks.sort(), prefix);
+
+  // Check months: any month where a week cache is newer?
+  const allWeeks = [...weekDays.keys()];
+  const monthWeeks = new Map<string, string[]>();
+  for (const d of allDays) {
+    const m = d.slice(0, 7);
+    if (!monthWeeks.has(m)) monthWeeks.set(m, []);
+  }
+  for (const w of allWeeks) {
+    // Map week to its months (a week can span two months; use the days)
+    for (const d of weekDays.get(w)!) {
+      const m = d.slice(0, 7);
+      if (monthWeeks.has(m) && !monthWeeks.get(m)!.includes(w)) monthWeeks.get(m)!.push(w);
+    }
+  }
+  const staleMonths: string[] = [];
+  for (const [month, weeks] of monthWeeks) {
+    const mt = mtime(cachePath("month", month));
+    if (weeks.some(w => mtime(cachePath("week", w)) > mt)) staleMonths.push(month);
+  }
+  if (staleMonths.length) await rebuildCache("month", staleMonths.sort(), prefix);
+
+  // Check quarters: any quarter where a month cache is newer?
+  const allMonths = [...monthWeeks.keys()];
+  const quarterMonths = new Map<string, string[]>();
+  for (const m of allMonths) {
+    const q = monthToQuarter(m);
+    if (!quarterMonths.has(q)) quarterMonths.set(q, []);
+    quarterMonths.get(q)!.push(m);
+  }
+  const staleQuarters: string[] = [];
+  for (const [quarter, months] of quarterMonths) {
+    const qt = mtime(cachePath("quarter", quarter));
+    if (months.some(m => mtime(cachePath("month", m)) > qt)) staleQuarters.push(quarter);
+  }
+  if (staleQuarters.length) {
+    for (const q of staleQuarters.sort()) await rebuildCache("quarter", [q], prefix);
+  }
+
+  // Check years: any year where a quarter cache is newer?
+  const allQuarters = [...quarterMonths.keys()];
+  const yearQuartersMap = new Map<string, string[]>();
+  for (const q of allQuarters) {
+    const y = q.split("-")[0];
+    if (!yearQuartersMap.has(y)) yearQuartersMap.set(y, []);
+    yearQuartersMap.get(y)!.push(q);
+  }
+  const staleYears: string[] = [];
+  for (const [year, quarters] of yearQuartersMap) {
+    const yt = mtime(cachePath("year", year));
+    if (quarters.some(q => mtime(cachePath("quarter", q)) > yt)) staleYears.push(year);
+  }
+  if (staleYears.length) {
+    for (const y of staleYears.sort()) await rebuildCache("year", [y], prefix);
+  }
+}
+
 // Derive unique refs at each level from a set of dates, rebuild bottom-up.
 // `from` controls the starting level: "day" | "week" | "month" | "quarter" | "year".
 async function batchCascade(dates: Set<string>, from: string = "day", prefix: string = "") {
@@ -344,9 +429,13 @@ async function sweep() {
   await Promise.all(pool);
   log(`  Episodes: ${ok} ok, ${exists} exist${fail ? `, ${fail} error` : ""}`);
 
-  if (touchedDays.size === 0) { log("Sweep done: nothing new"); globalThis._skipCascade = false; return; }
+  // Rebuild day caches for touched days
+  if (touchedDays.size > 0) {
+    await rebuildCache("day", [...touchedDays].sort());
+  }
 
-  await batchCascade(touchedDays as Set<string>, "day");
+  // Validate entire cache tree — catches incomplete cascades from previous runs
+  await validateCaches();
 
   globalThis._skipCascade = false;
   log(`Sweep done: ${ok} episodes, ${touchedDays.size} days touched`);
