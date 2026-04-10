@@ -2,14 +2,16 @@
 // snorrio CLI — administrative commands for snorrio.
 //
 // Usage:
-//   snorrio flush          Flush pending sessions through the daemon
-//   snorrio status         Show daemon and system status
-//   snorrio update         Pull latest and restart daemon
+//   snorrio flush                    Flush pending sessions through the daemon
+//   snorrio sweep                    Find & generate missing episodes, cascade caches
+//   snorrio reprocess <range> [depth] Regenerate from scratch in range
+//   snorrio status                   Show daemon and system status
+//   snorrio update                   Pull latest and restart daemon
 
 import { existsSync, statSync, writeFileSync, openSync, readSync, closeSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
-import { execSync } from "child_process";
+import { execSync, execFileSync } from "child_process";
 
 const HOME = process.env.HOME;
 const PKG_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -17,8 +19,43 @@ const SNORRIO_HOME = process.env.SNORRIO_HOME || join(HOME, "snorrio");
 const CONFIG_PATH = join(SNORRIO_HOME, "config", "config.json");
 const LOG_DIR = join(SNORRIO_HOME, "logs");
 const FLUSH_TRIGGER = join(SNORRIO_HOME, "flush");
+const PLIST_PATH = join(HOME, "Library", "LaunchAgents", "io.snorrio.dmn.plist");
 
 const cmd = process.argv[2];
+
+function daemonLoaded() {
+  try {
+    execFileSync("launchctl", ["list", "io.snorrio.dmn"], { stdio: "pipe" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function restartDaemon() {
+  const uid = execSync("id -u", { encoding: "utf8" }).trim();
+
+  try { execFileSync("launchctl", ["bootout", `gui/${uid}`, PLIST_PATH], { stdio: "pipe" }); } catch {}
+
+  const unloadDeadline = Date.now() + 5000;
+  while (daemonLoaded() && Date.now() < unloadDeadline) {
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+
+  let lastErr;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      execFileSync("launchctl", ["bootstrap", `gui/${uid}`, PLIST_PATH], { stdio: "inherit" });
+      try { execFileSync("launchctl", ["kickstart", "-k", `gui/${uid}/io.snorrio.dmn`], { stdio: "pipe" }); } catch {}
+      return;
+    } catch (err) {
+      lastErr = err;
+      await new Promise(resolve => setTimeout(resolve, 250 * (attempt + 1)));
+    }
+  }
+
+  throw lastErr;
+}
 
 if (!cmd || cmd === "help" || cmd === "--help") {
   console.log(`snorrio — memory system for AI agents
@@ -182,9 +219,7 @@ if (cmd === "flush") {
     execSync("git pull --ff-only", { cwd: PKG_ROOT, stdio: "inherit" });
 
     console.log("Restarting daemon...");
-    const uid = execSync("id -u", { encoding: "utf8" }).trim();
-    try { execSync(`launchctl bootout gui/${uid}/io.snorrio.dmn`, { stdio: "pipe" }); } catch {}
-    execSync(`launchctl bootstrap gui/${uid} ~/Library/LaunchAgents/io.snorrio.dmn.plist`, { stdio: "inherit" });
+    await restartDaemon();
 
     console.log("✓ Updated and restarted");
   } catch (err) {

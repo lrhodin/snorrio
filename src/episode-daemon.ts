@@ -263,11 +263,33 @@ async function validateCaches(prefix: string = "") {
   const cachePath = (level: string, ref: string) => join(CACHE_DIR, dirs[level], `${ref}.md`);
   const mtime = (p: string) => { try { return statSync(p).mtimeMs; } catch { return 0; } };
 
-  // Collect all day caches
-  const dayDir = join(CACHE_DIR, "days");
+  // Ground truth starts from episodes, not existing day caches.
   let allDays: string[] = [];
-  try { allDays = readdirSync(dayDir).filter(f => f.endsWith(".md")).map(f => f.replace(".md", "")).sort(); } catch {}
+  try {
+    allDays = readdirSync(EPISODES_DIR)
+      .filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d))
+      .filter(d => {
+        try { return readdirSync(join(EPISODES_DIR, d)).some(f => f.endsWith(".md")); }
+        catch { return false; }
+      })
+      .sort();
+  } catch {}
   if (!allDays.length) return;
+
+  // Check day caches: missing or older than any episode in that day?
+  const staleDays: string[] = [];
+  for (const day of allDays) {
+    const dayCacheMtime = mtime(cachePath("day", day));
+    let latestEpisodeMtime = 0;
+    try {
+      for (const f of readdirSync(join(EPISODES_DIR, day))) {
+        if (!f.endsWith(".md")) continue;
+        latestEpisodeMtime = Math.max(latestEpisodeMtime, mtime(join(EPISODES_DIR, day, f)));
+      }
+    } catch {}
+    if (!dayCacheMtime || latestEpisodeMtime > dayCacheMtime) staleDays.push(day);
+  }
+  if (staleDays.length) await rebuildCache("day", [...new Set(staleDays)].sort(), prefix);
 
   // Check weeks: any week where a day cache is newer?
   const weekDays = new Map<string, string[]>();
