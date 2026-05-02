@@ -196,8 +196,14 @@ function loadEpisodes(dateStr: string) {
     const sessionId = file.replace(".md", "");
     let sortKey = sessionIndex.get(sessionId);
     if (!sortKey) {
-      const headerMatch = content.match(/<!--\s*session:\s*\S+\s*\|\s*(\d{4}-\d{2}-\d{2})\s+\d{2}:\d{2}(?:→(\d{2}:\d{2}))?\s*\|/);
-      sortKey = headerMatch ? `${headerMatch[1]} ${headerMatch[2] || "00:00"}` : `${dateStr} 00:00`;
+      // Capture start time (group 2) and optional end time (group 3).
+      // Sort by start; end appended as natural string tiebreak.
+      // Prior bug: only end time was captured, so single-time and ranged
+      // headers collapsed inconsistently — single → 00:00, ranged → end.
+      const headerMatch = content.match(/<!--\s*session:\s*\S+\s*\|\s*(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})(?:→(\d{2}:\d{2}))?\s*\|/);
+      sortKey = headerMatch
+        ? `${headerMatch[1]} ${headerMatch[2]}${headerMatch[3] ? "→" + headerMatch[3] : ""}`
+        : `${dateStr} 00:00`;
     }
     episodes.push({ sessionId, sortKey, content });
   }

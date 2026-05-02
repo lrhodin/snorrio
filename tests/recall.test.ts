@@ -139,13 +139,35 @@ test("recall-engine retrieval invariants", async (t) => {
       "episode without parseable header should fall back to start-of-day sortKey");
 
     const withHdr = eps.find(e => e.sessionId === "with-header")!;
-    // NOTE: recall-engine's header regex captures the END time of the range
-    // (`14:00→14:30` → "14:30"); single-time headers fall back to "00:00".
-    // We pin to current behavior — see output report for the bug write-up.
-    assert.equal(withHdr.sortKey, `${B} 14:30`);
+    // Header regex now captures start time, with end appended as tiebreak.
+    // Range header `14:00→14:30` → sortKey `<date> 14:00→14:30`.
+    assert.equal(withHdr.sortKey, `${B} 14:00→14:30`);
 
-    // Therefore no-header sorts before with-header.
+    // Therefore no-header (00:00) sorts before with-header (14:00).
     assert.deepEqual(ids, ["no-header", "with-header"]);
+  });
+
+  // --- Invariant 3b: start-time controls sort, not end-time -----------
+  // Regression guard for the header-regex bug: prior implementation
+  // captured the END time of a range. Adversarial case where end-order
+  // inverts start-order:
+  //   ep-early-long: 09:00→12:00 (starts first, ends LAST)
+  //   ep-late-short: 10:00→10:15 (starts later, ends EARLIER)
+  // Correct (start) order: ep-early-long, ep-late-short.
+  // Buggy (end) order:     ep-late-short, ep-early-long.
+  await t.test("ranged headers: sort by start time, end is tiebreak", () => {
+    const F = "2026-03-09";
+    writeEpisode(F, "ep-early-long", header("ep-early-long", F, "09:00", "12:00"));
+    writeEpisode(F, "ep-late-short", header("ep-late-short", F, "10:00", "10:15"));
+    const ids = loadEpisodes(F).map(e => e.sessionId);
+    assert.deepEqual(ids, ["ep-early-long", "ep-late-short"]);
+
+    // Same-start tiebreak: shorter (earlier end) sorts first.
+    const G = "2026-03-10";
+    writeEpisode(G, "ep-tie-late",  header("ep-tie-late",  G, "09:00", "10:00"));
+    writeEpisode(G, "ep-tie-early", header("ep-tie-early", G, "09:00", "09:30"));
+    const tieIds = loadEpisodes(G).map(e => e.sessionId);
+    assert.deepEqual(tieIds, ["ep-tie-early", "ep-tie-late"]);
   });
 
   // --- Invariant 4: dedup within a day's result set --------------------
