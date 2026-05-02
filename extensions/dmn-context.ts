@@ -120,7 +120,58 @@ function formatGap(ms: number): string {
   return remHrs > 0 ? `${days}d ${remHrs}h` : `${days} day${days > 1 ? "s" : ""}`;
 }
 
-const GAP_MS = 4.5 * 60 * 1000; // 4:30, aligned with DMN idle timer
+export const GAP_MS = 4.5 * 60 * 1000; // 4:30, aligned with DMN idle timer
+
+// Pure transform: mutates `messages` in place, prefixing user/assistant
+// messages with timestamps and silence markers per the rules described on
+// the `context` handler below. Exported for testing.
+export function applyStamps(messages: any[], tz: string, gapThresholdMs: number = GAP_MS): void {
+  const userIndices: number[] = [];
+  for (let i = 0; i < messages.length; i++) {
+    if (messages[i].role === "user" && messages[i].timestamp) {
+      userIndices.push(i);
+    }
+  }
+  if (userIndices.length === 0) return;
+
+  const stampSet = new Set<number>();
+  const gapBefore = new Map<number, number>();
+
+  stampSet.add(userIndices[0]);
+  stampSet.add(userIndices[userIndices.length - 1]);
+
+  for (let j = 1; j < userIndices.length; j++) {
+    const prevTs = messages[userIndices[j - 1]].timestamp;
+    const currTs = messages[userIndices[j]].timestamp;
+    const delta = currTs - prevTs;
+    if (delta >= gapThresholdMs) {
+      stampSet.add(userIndices[j - 1]);
+      stampSet.add(userIndices[j]);
+      gapBefore.set(userIndices[j], delta);
+    }
+  }
+
+  for (const idx of stampSet) {
+    const msg = messages[idx];
+    if (msg.role !== "user" && msg.role !== "assistant") continue;
+    const stamp = formatStamp(msg.timestamp, tz);
+    const gap = gapBefore.get(idx);
+    const prefix = gap
+      ? `[${formatGap(gap)} of silence]\n[${stamp}] `
+      : `[${stamp}] `;
+
+    const content = msg.content;
+    if (Array.isArray(content)) {
+      const first = content.find(
+        (b: any): b is { type: "text"; text: string } =>
+          (b as { type?: string }).type === "text",
+      );
+      if (first) first.text = prefix + first.text;
+    } else if (typeof content === "string") {
+      msg.content = prefix + content;
+    }
+  }
+}
 
 export default function (pi: ExtensionAPI) {
   const tz = getTimezone();
@@ -149,60 +200,7 @@ export default function (pi: ExtensionAPI) {
   // - Always stamp first and last user messages
   // - On gaps >= 4:30: stamp both sides and insert a silence marker
   pi.on("context", (event) => {
-    const userIndices: number[] = [];
-    for (let i = 0; i < event.messages.length; i++) {
-      if (event.messages[i].role === "user" && event.messages[i].timestamp) {
-        userIndices.push(i);
-      }
-    }
-    if (userIndices.length === 0) return { messages: event.messages };
-
-    // Determine which messages to stamp and where gaps are
-    const stampSet = new Set<number>();
-    const gapBefore = new Map<number, number>(); // index -> gap duration in ms
-
-    // Always stamp first and last
-    stampSet.add(userIndices[0]);
-    stampSet.add(userIndices[userIndices.length - 1]);
-
-    // Find gaps — stamp both edges and record the gap
-    for (let j = 1; j < userIndices.length; j++) {
-      const prevTs = event.messages[userIndices[j - 1]].timestamp;
-      const currTs = event.messages[userIndices[j]].timestamp;
-      const delta = currTs - prevTs;
-      if (delta >= GAP_MS) {
-        stampSet.add(userIndices[j - 1]); // before gap
-        stampSet.add(userIndices[j]);     // after gap
-        gapBefore.set(userIndices[j], delta);
-      }
-    }
-
-    // Apply stamps and gap markers
-    for (const idx of stampSet) {
-      const msg = event.messages[idx];
-      // stampSet only ever contains user/assistant indices (built from userIndices
-      // above). Narrow explicitly so the compiler knows .content exists — skip
-      // bashExecution / branchSummary / compactionSummary / custom shapes that
-      // don't have a .content field.
-      if (msg.role !== "user" && msg.role !== "assistant") continue;
-      const stamp = formatStamp(msg.timestamp, tz);
-      const gap = gapBefore.get(idx);
-      const prefix = gap
-        ? `[${formatGap(gap)} of silence]\n[${stamp}] `
-        : `[${stamp}] `;
-
-      const content = msg.content;
-      if (Array.isArray(content)) {
-        const first = content.find(
-          (b): b is { type: "text"; text: string } =>
-            (b as { type?: string }).type === "text",
-        );
-        if (first) first.text = prefix + first.text;
-      } else if (typeof content === "string") {
-        msg.content = prefix + content;
-      }
-    }
-
+    applyStamps(event.messages as any[], tz, GAP_MS);
     return { messages: event.messages };
   });
 }
