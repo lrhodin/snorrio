@@ -15,7 +15,8 @@
   "include": [
     "src/**/*.ts",
     "extensions/**/*.ts",
-    "skills/**/*.ts"
+    "skills/**/*.ts",
+    "tests/**/*.ts"
   ],
   "exclude": [
     "node_modules",
