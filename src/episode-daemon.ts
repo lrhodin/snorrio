@@ -32,6 +32,7 @@ import {
 import { join, basename } from "path";
 import { hostname as osHostname } from "os";
 import { complete, getText, userMessage, SNORRIO_HOME, piRoot, getTimezone, CONFIG_PATH } from "./ai.ts";
+import { atomicWriteFile as atomicWrite } from "./atomic-write.ts";
 import { recall } from "./recall-engine.ts";
 import {
   sessionIdFromPath, sessionIdFromEntries,
@@ -212,14 +213,6 @@ function dateToWeek(dateStr: string) {
 function monthToQuarter(monthStr: string) {
   const [year, month] = monthStr.split("-").map(Number);
   return `${year}-Q${Math.ceil(month / 3)}`;
-}
-
-function atomicWrite(filePath: string, content: string) {
-  const dir = join(filePath, "..");
-  mkdirSync(dir, { recursive: true });
-  const tmp = filePath + ".tmp";
-  writeFileSync(tmp, content, "utf8");
-  renameSync(tmp, filePath);
 }
 
 const CACHE_Q_DAY = "Tell the story of today — write it as a narrative, not a checklist. What was worked on, what got decided, what changed. Track commitments made for today, but don't carry weekly or longer-term goals — just mention them naturally so higher levels can pick them up. Include session IDs so any thread can be traced back to its source.";
