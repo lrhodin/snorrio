@@ -6,6 +6,7 @@
   "description": "Memory and recall infrastructure for pi sessions.",
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
+    "test": "tsx --test tests/**/*.test.ts",
     "install-hooks": "git config core.hooksPath .githooks"
   },
   "peerDependencies": {
@@ -14,7 +15,8 @@
     "@sinclair/typebox": "*"
   },
   "devDependencies": {
-    "typescript": "^5.6.0",
-    "@types/node": "^22.0.0"
+    "@types/node": "^22.0.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.6.0"
   }
 }
