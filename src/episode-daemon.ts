@@ -26,8 +26,8 @@
 
 import { watch } from "fs";
 import {
-  readFileSync, writeFileSync, mkdirSync, existsSync, statSync,
-  readdirSync, unlinkSync, renameSync, appendFileSync,
+  readFileSync, mkdirSync, existsSync, statSync,
+  readdirSync, unlinkSync, appendFileSync,
 } from "fs";
 import { join, basename } from "path";
 import { hostname as osHostname } from "os";
@@ -179,9 +179,7 @@ async function generateEpisode(filePath: string) {
   const dir = join(EPISODES_DIR, dateStr);
   mkdirSync(dir, { recursive: true });
   const epPath = join(dir, `${id}.md`);
-  const tmp = epPath + ".tmp";
-  writeFileSync(tmp, fm + text, "utf8");
-  renameSync(tmp, epPath);
+  atomicWrite(epPath, fm + text);
 
   log(`  Done: ${id.slice(0, 8)} → ${text.length} chars`);
 
@@ -586,9 +584,7 @@ async function reprocess(rangeStr: string, depthStr?: string) {
         const dir = join(EPISODES_DIR, dateStr);
         mkdirSync(dir, { recursive: true });
         const epPath = join(dir, `${s.id}.md`);
-        const tmp = epPath + ".tmp";
-        writeFileSync(tmp, fm + text, "utf8");
-        renameSync(tmp, epPath);
+        atomicWrite(epPath, fm + text);
         log(`    ${s.id.slice(0, 8)} ✓ ${text.length} chars`);
         ok++;
       } catch (err: any) { log(`    Error: ${err.message?.slice(0, 100)}`); fail++; }
