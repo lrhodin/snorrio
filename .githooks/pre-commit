@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# snorrio pre-commit: typecheck staged TypeScript.
+# snorrio pre-commit: typecheck + run tests on staged TypeScript.
 #
 # Activated by `npm run install-hooks` (sets core.hooksPath = .githooks).
 # Skip with `git commit --no-verify` when you genuinely need to.
@@ -8,17 +8,17 @@ set -euo pipefail
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 
-# Only run when staged changes touch TypeScript under our typechecked paths.
+# Run when staged changes touch TS under typechecked paths OR tests.
 STAGED=$(git diff --cached --name-only --diff-filter=ACMR \
-  | grep -E '^(src|extensions|skills)/.*\.ts$' || true)
+  | grep -E '^(src|extensions|skills|tests)/.*\.ts$' || true)
 
 if [ -z "$STAGED" ]; then
   exit 0
 fi
 
-if [ ! -x "node_modules/.bin/tsc" ]; then
-  echo "pre-commit: typescript not installed locally — run \`npm install\` once."
-  echo "pre-commit: skipping typecheck for this commit."
+if [ ! -x "node_modules/.bin/tsc" ] || [ ! -x "node_modules/.bin/tsx" ]; then
+  echo "pre-commit: typescript/tsx not installed locally — run \`npm install\` once."
+  echo "pre-commit: skipping checks for this commit."
   exit 0
 fi
 
@@ -26,5 +26,12 @@ echo "pre-commit: tsc --noEmit on snorrio…"
 if ! ./node_modules/.bin/tsc -p tsconfig.json; then
   echo ""
   echo "pre-commit: typecheck failed. Fix the errors above, or commit with --no-verify."
+  exit 1
+fi
+
+echo "pre-commit: tsx --test tests/**/*.test.ts…"
+if ! ./node_modules/.bin/tsx --test tests/**/*.test.ts; then
+  echo ""
+  echo "pre-commit: tests failed. Fix the failures above, or commit with --no-verify."
   exit 1
 fi
