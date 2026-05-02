@@ -10,10 +10,14 @@
 // gets an episode.
 //
 // Cache lifecycle:
-//   New episode → regenerate day + week caches (atomic write)
-//   Day boundary (first episode of new day) → regenerate month, quarter, year
-//   All writes are atomic (tmp + rename). No gap where cache is missing.
-//   Higher caches are never more than ~24 hours stale.
+//   New episode (live mode) → cascade day → week → month → quarter → year
+//     for that date. No first-episode-of-day detection — every episode
+//     unconditionally rebuilds the full stack. With ~4:30 debounce in live
+//     mode this is bounded; batch paths (--reprocess, midnight sweep) set
+//     `_skipCascade` and drive their own deduplicated batchCascade at the
+//     end. Pure decision lives in cascade-decision.ts.
+//   All writes are atomic (tmp + rename + cleanup-on-failure via
+//     atomicWriteFile). No gap where cache is missing.
 //
 // Data:
 //   $SNORRIO_HOME/episodes/YYYY-MM-DD/<session-id>.md
