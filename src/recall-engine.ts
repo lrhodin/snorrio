@@ -18,6 +18,7 @@
 
 import { readFileSync, readdirSync, existsSync, writeFileSync, mkdirSync } from "fs";
 import { join } from "path";
+import { pathToFileURL } from "url";
 import { complete, stream as aiStream, getText, userMessage, SNORRIO_HOME, piRoot, getTimezone } from "./ai.ts";
 import { findSession, sessionIdFromPath, type SessionInfo } from "./session-meta.ts";
 
@@ -527,7 +528,11 @@ export { loadEpisodes, weekDates, monthWeeks, quarterMonths, yearQuarters, weekH
 // CLI
 // ============================================================================
 
-if (process.argv[1]?.includes("recall-engine") || process.argv[1]?.includes("recall")) {
+// Only run CLI when this file is the script entrypoint. The previous
+// substring guard fired on any argv[1] containing "recall", including test
+// files that import this module.
+const isMain = !!process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isMain) {
   const args = process.argv.slice(2);
 
   let modelSpec = "opus";
