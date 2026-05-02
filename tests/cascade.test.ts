@@ -102,10 +102,29 @@ test("dateToWeek handles a typical mid-year date", () => {
   assert.equal(dateToWeek("2026-01-01"), "2026-W01");
   // 2026-05-02 is a Saturday in 2026-W18.
   assert.equal(dateToWeek("2026-05-02"), "2026-W18");
-  // NOTE: dateToWeek diverges from strict ISO around 53-week years
-  // (e.g. 2024-12-30 returns 2025-W53 instead of 2025-W01). That's a
-  // separate issue called out in the report; the cascade decision itself
-  // does not depend on which side of the bug a date falls.
+});
+
+test("dateToWeek: ISO 8601 boundaries (regression)", () => {
+  // Mon 2024-12-30 belongs to 2025-W01 (its Thursday is 2025-01-02).
+  // Prior implementation returned 2025-W53.
+  assert.equal(dateToWeek("2024-12-30"), "2025-W01");
+  assert.equal(dateToWeek("2024-12-29"), "2024-W52");
+
+  // 2020 is a 53-week year (Jan 1 was Wed, Dec 31 was Thu).
+  assert.equal(dateToWeek("2020-12-31"), "2020-W53");
+  // Sun 2021-01-03 is the last day of 2020-W53.
+  // Prior implementation returned 2020-W01.
+  assert.equal(dateToWeek("2021-01-03"), "2020-W53");
+  assert.equal(dateToWeek("2021-01-04"), "2021-W01");
+
+  // 2026 is a 53-week year (Dec 31 2026 is Thursday).
+  assert.equal(dateToWeek("2026-12-31"), "2026-W53");
+  assert.equal(dateToWeek("2027-01-03"), "2026-W53");
+  assert.equal(dateToWeek("2027-01-04"), "2027-W01");
+
+  // 2009 was also 53-week.
+  assert.equal(dateToWeek("2009-12-31"), "2009-W53");
+  assert.equal(dateToWeek("2010-01-03"), "2009-W53");
 });
 
 test("monthToQuarter splits the year correctly", () => {
