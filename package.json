@@ -1,0 +1,20 @@
+{
+  "name": "snorrio",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Memory and recall infrastructure for pi sessions.",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "install-hooks": "git config core.hooksPath .githooks"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-ai": "*",
+    "@mariozechner/pi-coding-agent": "*",
+    "@sinclair/typebox": "*"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "@types/node": "^22.0.0"
+  }
+}

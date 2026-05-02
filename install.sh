@@ -22,6 +22,7 @@ main() {
   create_config
   install_cli
   install_daemon
+  install_dev_hooks
   ensure_path
 
   echo ""
@@ -199,6 +200,22 @@ EOF
   else
     echo "  warning: daemon failed to start — check $DATA_HOME/logs/"
   fi
+}
+
+install_dev_hooks() {
+  # Wire the checked-in pre-commit hook (typecheck) and install dev deps so it runs.
+  # Best-effort: skip silently if this isn't a working git checkout.
+  if [ ! -d "$PACKAGE_DIR/.git" ]; then return; fi
+  if [ ! -f "$PACKAGE_DIR/.githooks/pre-commit" ]; then return; fi
+
+  ( cd "$PACKAGE_DIR" && git config core.hooksPath .githooks ) || return 0
+
+  if [ ! -d "$PACKAGE_DIR/node_modules/typescript" ]; then
+    echo "  installing typecheck dev deps..."
+    ( cd "$PACKAGE_DIR" && npm install --silent --no-audit --no-fund ) || \
+      echo "  warning: npm install failed \u2014 pre-commit hook will skip typecheck until you run npm install"
+  fi
+  echo "  pre-commit hook installed (typecheck on staged .ts)"
 }
 
 ensure_path() {

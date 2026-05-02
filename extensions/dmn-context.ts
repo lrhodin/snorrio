@@ -180,6 +180,11 @@ export default function (pi: ExtensionAPI) {
     // Apply stamps and gap markers
     for (const idx of stampSet) {
       const msg = event.messages[idx];
+      // stampSet only ever contains user/assistant indices (built from userIndices
+      // above). Narrow explicitly so the compiler knows .content exists — skip
+      // bashExecution / branchSummary / compactionSummary / custom shapes that
+      // don't have a .content field.
+      if (msg.role !== "user" && msg.role !== "assistant") continue;
       const stamp = formatStamp(msg.timestamp, tz);
       const gap = gapBefore.get(idx);
       const prefix = gap
@@ -188,7 +193,10 @@ export default function (pi: ExtensionAPI) {
 
       const content = msg.content;
       if (Array.isArray(content)) {
-        const first = content.find((b: any) => b.type === "text");
+        const first = content.find(
+          (b): b is { type: "text"; text: string } =>
+            (b as { type?: string }).type === "text",
+        );
         if (first) first.text = prefix + first.text;
       } else if (typeof content === "string") {
         msg.content = prefix + content;

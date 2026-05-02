@@ -39,6 +39,15 @@ import {
   allSessions as metaAllSessions, type SessionInfo,
 } from "./session-meta.ts";
 
+// Side-channel flag used to suppress the cascading temporal-cache rebuild during
+// batch operations (--reprocess, midnight sweeps). Read in five places below;
+// set by callers that already drive the cascade themselves. Typed here so tsc
+// stops complaining about the implicit-any indexing on globalThis.
+declare global {
+  // eslint-disable-next-line no-var
+  var _skipCascade: boolean | undefined;
+}
+
 // Lazy pi session manager — only loaded when processing pi sessions
 let _piSessionManager: any;
 
