@@ -34,6 +34,7 @@ import { hostname as osHostname } from "os";
 import { complete, getText, userMessage, SNORRIO_HOME, piRoot, getTimezone, CONFIG_PATH } from "./ai.ts";
 import { atomicWriteFile as atomicWrite } from "./atomic-write.ts";
 import { recall } from "./recall-engine.ts";
+import { decideCascade, dateToWeek, monthToQuarter, type CascadeLevel } from "./cascade-decision.ts";
 import {
   sessionIdFromPath, sessionIdFromEntries,
   sessionTimestamps as metaTimestamps,
@@ -195,26 +196,6 @@ async function generateEpisode(filePath: string) {
 // TEMPORAL HELPERS
 // ============================================================================
 
-function dateToWeek(dateStr: string) {
-  const dt = new Date(dateStr + "T12:00:00Z");
-  const dayOfYear = Math.floor((Date.UTC(dt.getFullYear(), dt.getMonth(), dt.getDate()) - Date.UTC(dt.getFullYear(), 0, 1)) / 86400000) + 1;
-  const dow = dt.getDay() || 7;
-  const wn = Math.floor((dayOfYear - dow + 10) / 7);
-  let wy = dt.getFullYear();
-  if (wn < 1) wy--;
-  else if (wn > 52) {
-    const dec31 = new Date(wy, 11, 31);
-    const maxWeek = ((dec31.getDay() || 7) >= 4) ? 53 : 52;
-    if (wn > maxWeek) wy++;
-  }
-  return `${wy}-W${String(Math.max(1, wn)).padStart(2, "0")}`;
-}
-
-function monthToQuarter(monthStr: string) {
-  const [year, month] = monthStr.split("-").map(Number);
-  return `${year}-Q${Math.ceil(month / 3)}`;
-}
-
 const CACHE_Q_DAY = "Tell the story of today — write it as a narrative, not a checklist. What was worked on, what got decided, what changed. Track commitments made for today, but don't carry weekly or longer-term goals — just mention them naturally so higher levels can pick them up. Include session IDs so any thread can be traced back to its source.";
 const CACHE_Q_WEEK = "Write a narrative of this week so far — an essay, not a checklist. What threads are developing, what started or stalled, what's the trajectory? Don't repeat daily details — just what's visible across multiple days. You're the continuity layer across day boundaries — anything in flight that a new day needs to pick up should be here, with enough detail to find the right day. Reference specific dates so the reader can navigate down.";
 const CACHE_Q_MONTH = "Write a narrative of this month so far — an essay, not a checklist. What shifted, what themes emerged or faded, what's shaping the direction? Don't restate weekly details — just what's visible at the monthly level. You're the continuity layer across week boundaries — any active threads a new week needs to carry forward should be here, with enough context to find the right week. Reference specific weeks so the reader can navigate down.";
@@ -365,21 +346,12 @@ async function validateCaches(prefix: string = "") {
 
 // Derive unique refs at each level from a set of dates, rebuild bottom-up.
 // `from` controls the starting level: "day" | "week" | "month" | "quarter" | "year".
+// Pure decision lives in cascade-decision.ts; this wrapper does the IO.
 async function batchCascade(dates: Set<string>, from: string = "day", prefix: string = "") {
-  const levels: [string, (ds: string[]) => string[]][] = [
-    ["day",     (ds) => ds],
-    ["week",    (ds) => [...new Set(ds.map(d => dateToWeek(d)))]],
-    ["month",   (ds) => [...new Set(ds.map(d => d.slice(0, 7)))]],
-    ["quarter", (ds) => [...new Set(ds.map(d => monthToQuarter(d.slice(0, 7))))]],
-    ["year",    (ds) => [...new Set(ds.map(d => d.slice(0, 4)))]],
-  ];
-
-  const fromIdx = levels.findIndex(([name]) => name === from);
-  const allDates = [...dates].sort();
-
-  for (let i = fromIdx; i < levels.length; i++) {
-    const [name, extractRefs] = levels[i];
-    await rebuildCache(name, extractRefs(allDates).sort(), prefix);
+  const decision = decideCascade(dates, from as CascadeLevel);
+  for (const level of ["day", "week", "month", "quarter", "year"] as CascadeLevel[]) {
+    const refs = decision[level];
+    if (refs.length) await rebuildCache(level, refs, prefix);
   }
 }
 
