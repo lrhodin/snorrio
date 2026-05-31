@@ -16,7 +16,7 @@
 //   recall 2026-03-05 "What shipped today?"
 //   recall 2026-W09 "What was the main thread?"
 
-import { readFileSync, readdirSync, existsSync, writeFileSync, mkdirSync } from "fs";
+import { readFileSync, readdirSync, existsSync, writeFileSync, mkdirSync, realpathSync } from "fs";
 import { join } from "path";
 import { pathToFileURL } from "url";
 import { complete, stream as aiStream, getText, userMessage, SNORRIO_HOME, piRoot, getTimezone } from "./ai.ts";
@@ -141,10 +141,21 @@ async function recallPiSession(sessionFile: string, question: string, modelSpec:
     if (ts) temporalCtx = loadTemporalContext(ts);
   }
 
+  // Strip thinking blocks from context messages to save tokens and prevent Anthropic thinking block replay errors
+  const cleanMessages = ctx.messages.map((m: any) => {
+    if (Array.isArray(m.content)) {
+      return {
+        ...m,
+        content: m.content.filter((block: any) => block.type !== "thinking" && block.type !== "redacted_thinking")
+      };
+    }
+    return m;
+  });
+
   const systemPrompt = RECALL_SYSTEM + temporalCtx;
   const q = question + "\n\nRespond in plain text. Do not call any tools.";
 
-  return apiCallStream([...ctx.messages, userMessage(q)], systemPrompt, modelSpec, options.onChunk);
+  return apiCallStream([...cleanMessages, userMessage(q)], systemPrompt, modelSpec, options.onChunk);
 }
 
 function recallSession(ref: string, question: string, modelSpec: string, options: { context?: boolean; onChunk?: OnChunk } = {}) {
@@ -537,7 +548,18 @@ export { loadEpisodes, weekDates, monthWeeks, quarterMonths, yearQuarters, weekH
 // Only run CLI when this file is the script entrypoint. The previous
 // substring guard fired on any argv[1] containing "recall", including test
 // files that import this module.
-const isMain = !!process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+// argv[1] may be a symlink (e.g. ~/.local/bin/recall) while import.meta.url is
+// always the resolved real path. Node resolves symlinks for import.meta.url but
+// NOT for argv[1], so a direct === comparison is false under symlink invocation
+// (which silently skipped the whole CLI -> recall produced zero output).
+let isMain = false;
+try {
+  if (process.argv[1]) {
+    isMain = import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
+  }
+} catch {
+  isMain = false;
+}
 if (isMain) {
   const args = process.argv.slice(2);
 
