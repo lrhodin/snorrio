@@ -20,6 +20,7 @@ import { readFileSync, readdirSync, existsSync, writeFileSync, mkdirSync, realpa
 import { join } from "path";
 import { pathToFileURL } from "url";
 import { complete, stream as aiStream, getText, userMessage, SNORRIO_HOME, piRoot, getTimezone } from "./ai.ts";
+import { toReadableThinking } from "./model-independence.ts";
 import { findSession, sessionIdFromPath, type SessionInfo } from "./session-meta.ts";
 
 const HOME = process.env.HOME!;
@@ -141,21 +142,16 @@ async function recallPiSession(sessionFile: string, question: string, modelSpec:
     if (ts) temporalCtx = loadTemporalContext(ts);
   }
 
-  // Strip thinking blocks from context messages to save tokens and prevent Anthropic thinking block replay errors
-  const cleanMessages = ctx.messages.map((m: any) => {
-    if (Array.isArray(m.content)) {
-      return {
-        ...m,
-        content: m.content.filter((block: any) => block.type !== "thinking" && block.type !== "redacted_thinking")
-      };
-    }
-    return m;
-  });
+  // Make session-level recall model-independent: convert thinking blocks to
+  // readable text rather than stripping them, so any reader model can read any
+  // session faithfully without tripping Anthropic's thinking-signature replay
+  // 400. See src/model-independence.ts for the rationale.
+  const readableMessages = toReadableThinking(ctx.messages);
 
   const systemPrompt = RECALL_SYSTEM + temporalCtx;
   const q = question + "\n\nRespond in plain text. Do not call any tools.";
 
-  return apiCallStream([...cleanMessages, userMessage(q)], systemPrompt, modelSpec, options.onChunk);
+  return apiCallStream([...readableMessages, userMessage(q)], systemPrompt, modelSpec, options.onChunk);
 }
 
 function recallSession(ref: string, question: string, modelSpec: string, options: { context?: boolean; onChunk?: OnChunk } = {}) {
