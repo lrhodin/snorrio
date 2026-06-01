@@ -89,11 +89,21 @@ export function piRoot(): string | null {
 // Dynamic pi-ai imports — only attempted when pi is available
 let _piAi: any, _piOauth: any, _piAgent: any;
 
+// pi-ai was published under @mariozechner, then renamed to @earendil-works.
+// Try the new scope first, fall back to the old one.
+async function importPiAi(root: string, sub: string) {
+  for (const scope of ["@earendil-works/pi-ai", "@mariozechner/pi-ai"]) {
+    const p = join(root, "node_modules", scope, sub);
+    if (existsSync(p)) return import(p);
+  }
+  throw new Error(`pi-ai not found (looked for ${sub} under both scopes)`);
+}
+
 async function getPiAi() {
   if (!_piAi) {
     const root = piRoot();
     if (!root) throw new Error("pi not installed");
-    _piAi = await import(join(root, "node_modules/@mariozechner/pi-ai/dist/index.js"));
+    _piAi = await importPiAi(root, "dist/index.js");
   }
   return _piAi;
 }
@@ -102,7 +112,7 @@ async function getPiOauth() {
   if (!_piOauth) {
     const root = piRoot();
     if (!root) throw new Error("pi not installed");
-    _piOauth = await import(join(root, "node_modules/@mariozechner/pi-ai/dist/oauth.js"));
+    _piOauth = await importPiAi(root, "dist/oauth.js");
   }
   return _piOauth;
 }
