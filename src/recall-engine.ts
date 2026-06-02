@@ -488,6 +488,12 @@ Name specific quarters, months, or weeks when referencing detail so the caller c
 
 type OnChunk = (accumulated: string) => void;
 
+// CLI-only streaming state. Set by main() exclusively; programmatic callers
+// (e.g. the episode daemon) leave these unset so apiCallStream stays a pure
+// text pump for them — no abort wiring, no stderr liveness writes.
+let _cliAbortSignal: AbortSignal | undefined;
+let _cliEmitThinking = false;
+
 async function apiCall(messages: any[], systemPrompt: string, modelSpec: string) {
   const result = await complete(messages, systemPrompt, modelSpec);
 
@@ -503,14 +509,45 @@ async function apiCall(messages: any[], systemPrompt: string, modelSpec: string)
 async function apiCallStream(messages: any[], systemPrompt: string, modelSpec: string, onChunk?: OnChunk) {
   if (!onChunk) return apiCall(messages, systemPrompt, modelSpec);
 
-  const eventStream = aiStream(messages, systemPrompt, modelSpec);
+  // Pass the CLI abort signal through to pi-ai so SIGINT cancels the in-flight
+  // HTTP request rather than just abandoning the loop.
+  const options = _cliAbortSignal ? { signal: _cliAbortSignal } : {};
+  const eventStream = aiStream(messages, systemPrompt, modelSpec, null, options);
   let accumulated = "";
+  let thinkingOpen = false;
 
-  for await (const event of eventStream) {
-    if (event.type === "text_delta") {
-      accumulated += event.delta;
-      onChunk(accumulated);
+  const closeThinking = () => {
+    if (thinkingOpen) { process.stderr.write("\n"); thinkingOpen = false; }
+  };
+
+  try {
+    for await (const event of eventStream) {
+      if (event.type === "text_delta") {
+        closeThinking();
+        accumulated += event.delta;
+        onChunk(accumulated);
+      } else if (event.type === "thinking_delta" && _cliEmitThinking) {
+        // Liveness only. stdout stays answer-text-only; the thinking pulse goes
+        // to stderr so a long opus pre-text phase doesn't look like a hang.
+        if (!thinkingOpen) { process.stderr.write("[recall: thinking"); thinkingOpen = true; }
+        process.stderr.write(".");
+      } else if (event.type === "error") {
+        closeThinking();
+        // pi-ai runs maxRetries:0 — an overloaded/429 terminates the stream with
+        // an `error` event. Surface it as a hard-fail marker (no retries).
+        if (event.reason === "aborted") return "[recall: aborted]";
+        const errMsg = event.error?.errorMessage || "unknown API error";
+        const match = errMsg.match(/"message":"([^"]+)"/);
+        return `[recall: API error — ${match ? match[1] : errMsg.slice(0, 200)}]`;
+      }
     }
+  } catch (err: any) {
+    closeThinking();
+    // Abort surfaces as a throw on some providers; treat it as a clean stop and
+    // keep whatever already streamed to stdout.
+    if (_cliAbortSignal?.aborted || err?.name === "AbortError") return "[recall: aborted]";
+    const msg = err?.message || String(err);
+    return `[recall: API error — ${msg.slice(0, 200)}]`;
   }
 
   return accumulated || "[recall: empty response from API]";
@@ -584,11 +621,48 @@ if (isMain) {
   const ref = args[0];
   const question = args.slice(1).join(" ");
 
+  // Stream the answer to stdout as it arrives. apiCallStream hands onChunk the
+  // FULL accumulated string each call, not the delta — print only the newly
+  // appended tail (tracked via `printed`) so we never double-print.
+  let printed = 0;
+  const onChunk = (accumulated: string) => {
+    if (accumulated.length > printed) {
+      process.stdout.write(accumulated.slice(printed));
+      printed = accumulated.length;
+    }
+  };
+
+  // Graceful interrupt: SIGINT/SIGTERM abort the in-flight request. Whatever
+  // already streamed to stdout is preserved; the abort returns a marker that
+  // is NOT re-printed (printed > 0 path) and is never cached.
+  const abort = new AbortController();
+  _cliAbortSignal = abort.signal;
+  _cliEmitThinking = true;
+  const onSignal = () => abort.abort();
+  process.on("SIGINT", onSignal);
+  process.on("SIGTERM", onSignal);
+
   try {
-    const answer = await recall(ref, question, modelSpec, { context });
-    console.log(answer);
+    const answer = await recall(ref, question, modelSpec, { context, onChunk });
+
+    // Hard-fail on provider error (e.g. overload/429). Surface to stderr, exit
+    // non-zero — mirrors the non-streaming apiCall() error contract.
+    if (typeof answer === "string" && answer.startsWith("[recall: API error")) {
+      process.stderr.write((printed > 0 ? "\n" : "") + answer + "\n");
+      process.exit(1);
+    }
+
+    if (printed > 0) {
+      // Content already streamed via onChunk — do NOT re-log `answer` (that's the
+      // double-print trap). Just terminate the line.
+      process.stdout.write("\n");
+    } else {
+      // Nothing streamed: an early marker (e.g. "[recall: no episodes…]"), an
+      // aborted-before-text stop, or the non-streaming fallback. Print as-is.
+      process.stdout.write(answer + "\n");
+    }
   } catch (err: any) {
-    console.error(`recall failed: ${err.message}`);
+    process.stderr.write((printed > 0 ? "\n" : "") + `recall failed: ${err.message}\n`);
     process.exit(1);
   }
 }
