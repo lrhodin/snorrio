@@ -297,25 +297,50 @@ async function resolveAlias(alias: string, preferredProvider: string | null, piA
 
 // --- LLM Calls ---
 
+// Env-gated timing instrumentation (SNORRIO_AI_TIMING=1). Default off, no behavior change.
+// Partitions a call into resolve+auth (our toolchain) vs TTFT/stream throughput (provider),
+// so a "stall" can be attributed to the right layer. Writes to stderr.
+const _AI_TIMING = process.env.SNORRIO_AI_TIMING === "1";
+const _AI_TAG = process.env.SNORRIO_AI_TAG || `${process.pid}`;
+function _tlog(phase: string, info: string) {
+  if (_AI_TIMING) process.stderr.write(`[AI-TIMING ${new Date().toISOString()} tag=${_AI_TAG}] ${phase} ${info}\n`);
+}
+
 async function piComplete(messages: Message[], systemPrompt: string, modelSpec: string | null, toolName: string | null, options: Record<string, any> = {}): Promise<CompletionResult> {
+  const t0 = Date.now();
   const resolved = await resolveModel(modelSpec, toolName);
   const piAi = await getPiAi();
-  return piAi.completeSimple(
+  _tlog("resolve+auth", `${Date.now() - t0}ms model=${resolved.model.provider}/${resolved.model.id}`);
+  const tApi = Date.now();
+  const result = await piAi.completeSimple(
     resolved.model,
     { systemPrompt, messages },
     { apiKey: resolved.apiKey, ...options },
   );
+  _tlog("complete-done", `apiMs=${Date.now() - tApi} totalMs=${Date.now() - t0} stop=${(result as any)?.stopReason}`);
+  return result;
 }
 
 async function* piStream(messages: Message[], systemPrompt: string, modelSpec: string | null, toolName: string | null, options: Record<string, any> = {}): AsyncGenerator<any> {
+  const t0 = Date.now();
   const resolved = await resolveModel(modelSpec, toolName);
   const piAi = await getPiAi();
+  _tlog("resolve+auth", `${Date.now() - t0}ms model=${resolved.model.provider}/${resolved.model.id}`);
+  const tStream = Date.now();
   const eventStream = piAi.streamSimple(
     resolved.model,
     { systemPrompt, messages },
     { apiKey: resolved.apiKey, ...options },
   );
-  yield* eventStream;
+  let n = 0, first = 0, last = tStream, maxgap = 0;
+  for await (const event of eventStream) {
+    const now = Date.now();
+    if (!first) { first = now; _tlog("TTFT", `${now - tStream}ms (first stream event)`); }
+    const gap = now - last; if (gap > maxgap) maxgap = gap; last = now;
+    n++;
+    yield event;
+  }
+  _tlog("stream-done", `events=${n} ttftMs=${first ? first - tStream : -1} streamMs=${Date.now() - tStream} maxGapMs=${maxgap} totalMs=${Date.now() - t0}`);
 }
 
 // --- Public API ---
