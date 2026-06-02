@@ -40,7 +40,7 @@ export interface Resolved {
   apiKey: string;
 }
 
-interface Message {
+export interface Message {
   role: string;
   content: string | any[];
   timestamp?: number;

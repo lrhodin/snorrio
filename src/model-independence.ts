@@ -24,7 +24,11 @@
 export const THINKING_TYPES = new Set(["thinking", "redacted_thinking"]);
 
 type Block = { type?: string; thinking?: string; [k: string]: unknown };
-type Msg = { role?: string; content?: unknown; provider?: string; api?: string; model?: string; [k: string]: unknown };
+// Structural constraint for the message-shaped objects these helpers operate on.
+// Intentionally loose (all fields optional) so callers can pass concrete, closed
+// message types (e.g. ai.ts `Message`) and get the same element type back. No
+// index signature: requiring one would reject closed object types as type args.
+type Msg = { role?: string; content?: unknown; provider?: string; api?: string; model?: string };
 
 /**
  * RECALL: render thinking as readable, labeled text so any reader model can

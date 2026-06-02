@@ -35,7 +35,7 @@ import {
 } from "fs";
 import { join, basename } from "path";
 import { hostname as osHostname } from "os";
-import { complete, getText, userMessage, SNORRIO_HOME, piRoot, getTimezone, CONFIG_PATH } from "./ai.ts";
+import { complete, getText, userMessage, SNORRIO_HOME, piRoot, getTimezone, CONFIG_PATH, type Message } from "./ai.ts";
 import { toReadableThinking } from "./model-independence.ts";
 import { atomicWriteFile as atomicWrite } from "./atomic-write.ts";
 import { recall } from "./recall-engine.ts";
@@ -167,7 +167,7 @@ async function generateEpisode(filePath: string) {
   if (!ctx.messages.length) { log(`  Empty context: ${id.slice(0, 8)}`); return null; }
 
   const messages = [
-    ...toReadableThinking(ctx.messages),
+    ...toReadableThinking<Message>(ctx.messages),
     userMessage(EPISODE_PROMPT),
   ];
 
@@ -577,7 +577,7 @@ async function reprocess(rangeStr: string, depthStr?: string) {
         } catch (err: any) { log(`    Context failed ${s.id.slice(0,8)}: ${err.message?.slice(0,100)}`); fail++; return; }
         if (!ctx.messages.length) { skip++; return; }
 
-        const messages = [...toReadableThinking(ctx.messages), userMessage(EPISODE_PROMPT)];
+        const messages = [...toReadableThinking<Message>(ctx.messages), userMessage(EPISODE_PROMPT)];
         const result = await complete(messages, EPISODE_SYSTEM, null, "dmn");
         const text = getText(result);
         if (!text?.trim()) {
