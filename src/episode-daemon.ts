@@ -36,7 +36,7 @@ import {
 import { join, basename } from "path";
 import { hostname as osHostname } from "os";
 import { complete, getText, userMessage, SNORRIO_HOME, piRoot, getTimezone, CONFIG_PATH, type Message } from "./ai.ts";
-import { toReadableThinking } from "./model-independence.ts";
+import { sessionMessagesToLlm, type RawSessionMessage } from "./model-independence.ts";
 import { atomicWriteFile as atomicWrite } from "./atomic-write.ts";
 import { recall } from "./recall-engine.ts";
 import { decideCascade, dateToWeek, monthToQuarter, type CascadeLevel } from "./cascade-decision.ts";
@@ -58,12 +58,13 @@ declare global {
 // Minimal local description of pi's session-manager surface. pi is a dynamic,
 // optional dependency loaded from the *global* install at runtime, so we do NOT
 // depend on its published types (mirrors ai.ts treating pi-ai as `any`). Describe
-// only what snorrio touches. Messages are our own loose `Message`: a `role` is
-// always present; `content` is optional — pi control entries (branchSummary,
-// compactionSummary, bashExecution) carry none.
+// only what snorrio touches. Messages come in as RawSessionMessage (loose: pi
+// control entries — branchSummary, compactionSummary, bashExecution — carry no
+// content); sessionMessagesToLlm() narrows them to strict, content-bearing
+// Message[] at the read boundary before complete().
 interface SessionEntry { type?: string; id?: string; [k: string]: unknown }
 type FileEntry = SessionEntry;
-interface SessionContext { messages: Message[] }
+interface SessionContext { messages: RawSessionMessage[] }
 
 // The dynamic `import()` of a runtime-computed path is `any` to tsc; assign it to
 // this typed surface (any→typed is a legal assignment, no cast).
@@ -185,7 +186,7 @@ async function generateEpisode(filePath: string) {
   if (!ctx.messages.length) { log(`  Empty context: ${id.slice(0, 8)}`); return null; }
 
   const messages = [
-    ...toReadableThinking(ctx.messages),
+    ...sessionMessagesToLlm(ctx.messages),
     userMessage(EPISODE_PROMPT),
   ];
 
@@ -595,7 +596,7 @@ async function reprocess(rangeStr: string, depthStr?: string) {
         } catch (err: any) { log(`    Context failed ${s.id.slice(0,8)}: ${err.message?.slice(0,100)}`); fail++; return; }
         if (!ctx.messages.length) { skip++; return; }
 
-        const messages = [...toReadableThinking(ctx.messages), userMessage(EPISODE_PROMPT)];
+        const messages = [...sessionMessagesToLlm(ctx.messages), userMessage(EPISODE_PROMPT)];
         const result = await complete(messages, EPISODE_SYSTEM, null, "dmn");
         const text = getText(result);
         if (!text?.trim()) {

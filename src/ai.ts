@@ -42,12 +42,12 @@ export interface Resolved {
 
 export interface Message {
   role: string;
-  // Optional: session contexts from pi's buildSessionContext() yield the broader
-  // AgentMessage union, which includes control messages (branchSummary,
-  // compactionSummary, bashExecution) that carry no `content` field. complete()
-  // receives those as-is, so the contract must admit them. userMessage() and all
-  // LLM-bound messages still set content.
-  content?: string | any[];
+  // Required. pi's buildSessionContext() yields the broader AgentMessage union
+  // (control messages with no `content`), but those never reach here raw:
+  // sessionMessagesToLlm() in model-independence.ts narrows them to content-
+  // bearing Messages at snorrio's owned session-read boundary. Everything that
+  // hits complete()/stream() is a real, content-bearing LLM message.
+  content: string | any[];
   timestamp?: number;
 }
 

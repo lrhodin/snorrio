@@ -2,7 +2,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { toReadableThinking, dropForeignThinking, THINKING_TYPES } from "../src/model-independence.ts";
+import {
+  toReadableThinking,
+  dropForeignThinking,
+  THINKING_TYPES,
+  normalizeSessionMessages,
+  sessionMessagesToLlm,
+} from "../src/model-independence.ts";
 
 const SESS = join(
   process.env.HOME!,
@@ -90,4 +96,64 @@ test("dropForeignThinking: keeps own-model thinking, drops the other model's", (
 test("dropForeignThinking: no model => passthrough (never breaks)", () => {
   const msgs = loadMixedSession();
   assert.equal(dropForeignThinking(msgs, undefined), msgs);
+});
+
+test("normalizeSessionMessages: control messages narrowed; every output has content", () => {
+  const raw = [
+    { role: "user", content: "hi" },
+    { role: "assistant", content: [{ type: "text", text: "hello" }] },
+    { role: "branchSummary", summary: "explored a dead end", fromId: "x", timestamp: 1 },
+    { role: "compactionSummary", summary: "earlier stuff", tokensBefore: 999, timestamp: 2 },
+    { role: "bashExecution", command: "ls", output: "a\nb", exitCode: 0, timestamp: 3 },
+    { role: "bashExecution", command: "secret", output: "x", excludeFromContext: true, timestamp: 4 },
+    { role: "custom", customType: "note", content: "injected note", display: true, timestamp: 5 },
+  ];
+
+  const out = normalizeSessionMessages(raw as any);
+
+  // The excluded bash escape is dropped; everything else survives (7 -> 6).
+  assert.equal(out.length, 6, "excludeFromContext bash escape dropped");
+
+  // No control roles remain on the wire.
+  const controlRoles = new Set(["bashExecution", "branchSummary", "compactionSummary", "custom"]);
+  assert.ok(out.every((m) => !controlRoles.has(m.role)), "no control roles survive");
+
+  // The strict contract: every emitted message carries non-empty content.
+  assert.ok(
+    out.every((m) => (typeof m.content === "string" ? m.content.length > 0 : Array.isArray(m.content))),
+    "every normalized message has content",
+  );
+
+  // Summaries are CONVERTED (their text is preserved), not dropped.
+  const text = out.map((m) => (typeof m.content === "string" ? m.content : "")).join("\n");
+  assert.match(text, /explored a dead end/, "branch summary text preserved");
+  assert.match(text, /earlier stuff/, "compaction summary text preserved");
+  assert.match(text, /\$ ls/, "bash escape rendered compactly");
+  assert.match(text, /injected note/, "custom content preserved");
+  assert.doesNotMatch(text, /secret/, "hidden bash escape not leaked");
+});
+
+test("sessionMessagesToLlm: composes normalization + readable-thinking", () => {
+  const raw = [
+    { role: "assistant", content: [
+      { type: "thinking", thinking: "private reasoning", thinkingSignature: "sig" },
+      { type: "text", text: "answer" },
+    ] },
+    { role: "compactionSummary", summary: "older context", tokensBefore: 1, timestamp: 1 },
+  ];
+
+  const out = sessionMessagesToLlm(raw as any);
+
+  // Thinking signature is gone; reasoning rendered as <thinking> text.
+  const flat = out.filter((m) => Array.isArray(m.content)).flatMap((m) => m.content as any[]);
+  assert.ok(!flat.some((b: any) => b && "thinkingSignature" in b), "no signature reaches the wire");
+  assert.ok(
+    flat.some((b: any) => b?.type === "text" && b.text.startsWith("<thinking>")),
+    "reasoning rendered readable",
+  );
+  // And the compaction summary was narrowed to a content-bearing user turn.
+  assert.ok(
+    out.some((m) => m.role === "user" && typeof m.content === "string" && m.content.includes("older context")),
+    "compaction summary narrowed to user text",
+  );
 });

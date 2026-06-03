@@ -21,6 +21,8 @@
 //
 // Redacted (encrypted) thinking has no readable content; drop it in both cases.
 
+import type { Message } from "./ai.ts";
+
 export const THINKING_TYPES = new Set(["thinking", "redacted_thinking"]);
 
 type Block = { type?: string; thinking?: string; [k: string]: unknown };
@@ -68,4 +70,98 @@ export function dropForeignThinking<T extends Msg>(
     if (!content.some((b) => THINKING_TYPES.has(b?.type as string))) return m;
     return { ...m, content: content.filter((b) => !THINKING_TYPES.has(b?.type as string)) };
   });
+}
+
+// --- Session control-message normalization ---
+//
+// pi's buildSessionContext() yields, alongside ordinary user/assistant turns, a
+// handful of session-bookkeeping "control" messages: bash escapes (the `!cmd`
+// shell prompt, NOT the Bash tool), branch summaries, compaction summaries, and
+// extension-injected custom messages. They carry non-conversational roles
+// ("bashExecution", "branchSummary", "compactionSummary", "custom"), and the
+// summary/bash kinds have NO `content` field at all — so they are not valid LLM
+// messages and must not reach a provider as-is (their roles aren't understood and
+// they'd send empty content). This path runs only at recall + DMN read time,
+// never live, so snorrio owns the editorial choice of how to present this
+// bookkeeping to a reader model. We do it structurally (matched on role + fields)
+// without importing pi's types or its convertToLlm() — same decoupling stance as
+// the rest of this file and ai.ts: pi is a runtime-global, untyped dependency.
+
+const CONTROL_ROLES = new Set(["bashExecution", "branchSummary", "compactionSummary", "custom"]);
+
+// snorrio's own framing of pi's summary bookkeeping (deliberately not pi's wire
+// constants — we don't couple to pi strings, we choose how to present them).
+const BRANCH_SUMMARY_LABEL = "[summary of a branch this conversation returned from]";
+const COMPACTION_SUMMARY_LABEL = "[summary of earlier conversation history that was compacted]";
+
+// The raw, loose shape pi hands us at the buildSessionContext() boundary. Index
+// signature lets the normalizer read control-message fields (.summary, .command)
+// that the strict Message type doesn't carry.
+export type RawSessionMessage = { role?: string; content?: unknown; timestamp?: number; [k: string]: unknown };
+
+function contentToText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((b: any) => (typeof b?.text === "string" ? b.text : ""))
+      .filter(Boolean)
+      .join("\n");
+  }
+  return "";
+}
+
+/**
+ * Narrow pi's raw session messages (the AgentMessage union, handled
+ * structurally) to strict snorrio Messages fit for an LLM. Ordinary turns pass
+ * through; control messages are converted to readable user-text or dropped per
+ * snorrio's editorial choice. Every emitted message carries content, so the
+ * downstream `Message.content` contract is honestly required (no paper-over).
+ *
+ * Editorial choices (Ludvig, 2026-06-03): branch/compaction summaries are the
+ * model's own summary of dropped context — genuine recall signal — so CONVERT
+ * them to readable text. Bash escapes are noisy and rare; honor pi's
+ * `excludeFromContext` (the `!!` hide flag) and otherwise render compactly.
+ */
+export function normalizeSessionMessages(messages: RawSessionMessage[]): Message[] {
+  const out: Message[] = [];
+  for (const m of messages) {
+    const role = m.role;
+    if (!role || !CONTROL_ROLES.has(role)) {
+      // Ordinary conversation turn. Spread the ORIGINAL through unchanged so all
+      // top-level fields survive (tool-call linkage like tool_use_id, plus
+      // provider/api/model that downstream thinking transforms read). Only fill
+      // role/content so the strict Message contract holds at runtime too.
+      out.push({ ...m, role: role ?? "user", content: (m.content ?? "") as string | any[] });
+      continue;
+    }
+    if (role === "bashExecution") {
+      if (m.excludeFromContext) continue; // pi marked it hidden (`!!` prefix)
+      const command = typeof m.command === "string" ? m.command : "";
+      const output = typeof m.output === "string" ? m.output : "";
+      const text = `$ ${command}${output ? `\n${output}` : ""}`.trim();
+      if (text) out.push({ role: "user", content: text, timestamp: m.timestamp });
+      continue;
+    }
+    if (role === "branchSummary" || role === "compactionSummary") {
+      const summary = typeof m.summary === "string" ? m.summary.trim() : "";
+      if (!summary) continue;
+      const label = role === "branchSummary" ? BRANCH_SUMMARY_LABEL : COMPACTION_SUMMARY_LABEL;
+      out.push({ role: "user", content: `${label}\n${summary}`, timestamp: m.timestamp });
+      continue;
+    }
+    // role === "custom": extension-injected; keep its real content if present.
+    const text = contentToText(m.content);
+    if (text) out.push({ role: "user", content: text, timestamp: m.timestamp });
+  }
+  return out;
+}
+
+/**
+ * The single transform applied to pi's buildSessionContext() messages before
+ * they reach complete()/stream(): narrow control messages to LLM-fit user text,
+ * then render thinking blocks readably. This is snorrio's owned session-read
+ * boundary — the seam that turns pi's raw AgentMessage[] into strict Message[].
+ */
+export function sessionMessagesToLlm(messages: RawSessionMessage[]): Message[] {
+  return toReadableThinking(normalizeSessionMessages(messages));
 }

@@ -20,7 +20,7 @@ import { readFileSync, readdirSync, existsSync, writeFileSync, mkdirSync, realpa
 import { join } from "path";
 import { pathToFileURL } from "url";
 import { complete, stream as aiStream, getText, userMessage, SNORRIO_HOME, piRoot, getTimezone, type Message } from "./ai.ts";
-import { toReadableThinking } from "./model-independence.ts";
+import { sessionMessagesToLlm, type RawSessionMessage } from "./model-independence.ts";
 import { findSession, sessionIdFromPath, type SessionInfo } from "./session-meta.ts";
 
 const HOME = process.env.HOME!;
@@ -31,11 +31,12 @@ const CACHE_DIR = join(SNORRIO_HOME, "cache");
 // Minimal local description of pi's session-manager surface. pi is a dynamic,
 // optional dependency loaded from the *global* install at runtime, so we do NOT
 // depend on its published types (mirrors ai.ts treating pi-ai as `any`). Describe
-// only what snorrio touches. Messages are our own loose `Message`: a `role` is
-// always present; `content` is optional — pi control entries carry none.
+// only what snorrio touches. Messages come in as RawSessionMessage (loose: pi
+// control entries carry no content); sessionMessagesToLlm() narrows them to
+// strict, content-bearing Message[] at the read boundary before complete().
 interface SessionEntry { type?: string; id?: string; [k: string]: unknown }
 type FileEntry = SessionEntry;
-interface SessionContext { messages: Message[] }
+interface SessionContext { messages: RawSessionMessage[] }
 
 // The dynamic `import()` of a runtime-computed path is `any` to tsc; assign it to
 // this typed surface (any→typed is a legal assignment, no cast).
@@ -163,7 +164,7 @@ async function recallPiSession(sessionFile: string, question: string, modelSpec:
   // readable text rather than stripping them, so any reader model can read any
   // session faithfully without tripping Anthropic's thinking-signature replay
   // 400. See src/model-independence.ts for the rationale.
-  const readableMessages = toReadableThinking(ctx.messages);
+  const readableMessages = sessionMessagesToLlm(ctx.messages);
 
   const systemPrompt = RECALL_SYSTEM + temporalCtx;
   const q = question + "\n\nRespond in plain text. Do not call any tools.";
