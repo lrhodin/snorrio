@@ -19,7 +19,7 @@
 import { readFileSync, readdirSync, existsSync, writeFileSync, mkdirSync, realpathSync } from "fs";
 import { join } from "path";
 import { pathToFileURL } from "url";
-import { complete, stream as aiStream, getText, userMessage, SNORRIO_HOME, piRoot, getTimezone } from "./ai.ts";
+import { complete, stream as aiStream, getText, userMessage, SNORRIO_HOME, piRoot, getTimezone, type Message } from "./ai.ts";
 import { toReadableThinking } from "./model-independence.ts";
 import { findSession, sessionIdFromPath, type SessionInfo } from "./session-meta.ts";
 
@@ -28,16 +28,31 @@ const PI_SESSIONS_DIR = join(HOME, ".pi/agent/sessions");
 const EPISODES_DIR = join(SNORRIO_HOME, "episodes");
 const CACHE_DIR = join(SNORRIO_HOME, "cache");
 
-// Lazy pi imports — only loaded when processing pi sessions
-let _piSessionManager: any;
+// Minimal local description of pi's session-manager surface. pi is a dynamic,
+// optional dependency loaded from the *global* install at runtime, so we do NOT
+// depend on its published types (mirrors ai.ts treating pi-ai as `any`). Describe
+// only what snorrio touches. Messages are our own loose `Message`: a `role` is
+// always present; `content` is optional — pi control entries carry none.
+interface SessionEntry { type?: string; id?: string; [k: string]: unknown }
+type FileEntry = SessionEntry;
+interface SessionContext { messages: Message[] }
 
-async function getPiSessionManager() {
-  if (!_piSessionManager) {
-    const root = piRoot();
-    if (!root) throw new Error("pi not installed — cannot process pi sessions");
-    _piSessionManager = await import(join(root, "dist/core/session-manager.js"));
-  }
-  return _piSessionManager;
+// The dynamic `import()` of a runtime-computed path is `any` to tsc; assign it to
+// this typed surface (any→typed is a legal assignment, no cast).
+interface PiSessionManager {
+  loadEntriesFromFile(filePath: string): FileEntry[];
+  buildSessionContext(entries: SessionEntry[], leafId?: string | null): SessionContext;
+}
+
+let _piSessionManager: PiSessionManager | undefined;
+
+async function getPiSessionManager(): Promise<PiSessionManager> {
+  if (_piSessionManager) return _piSessionManager;
+  const root = piRoot();
+  if (!root) throw new Error("pi not installed — cannot process pi sessions");
+  // RHS is `any` (runtime-computed specifier); assigns to PiSessionManager
+  // without a cast. The module genuinely exports this surface.
+  return (_piSessionManager = await import(join(root, "dist/core/session-manager.js")));
 }
 
 // ============================================================================
@@ -127,10 +142,12 @@ async function recallPiSession(sessionFile: string, question: string, modelSpec:
   const { loadEntriesFromFile, buildSessionContext } = await getPiSessionManager();
 
   const entries = loadEntriesFromFile(sessionFile);
-  const sessionEntries = entries.filter((e: any) => e.type !== "session");
+  // loadEntriesFromFile returns FileEntry[] (includes the session header);
+  // dropping the "session" entry narrows to SessionEntry[] for buildSessionContext.
+  const sessionEntries = entries.filter((e): e is SessionEntry => e.type !== "session");
   if (sessionEntries.length === 0) return "[recall: session has no entries]";
 
-  let ctx: any;
+  let ctx: SessionContext;
   try { ctx = buildSessionContext(sessionEntries); }
   catch (err: any) { return `[recall: failed to build context — ${err.message?.slice(0, 200)}]`; }
 

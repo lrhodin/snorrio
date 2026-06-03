@@ -42,7 +42,12 @@ export interface Resolved {
 
 export interface Message {
   role: string;
-  content: string | any[];
+  // Optional: session contexts from pi's buildSessionContext() yield the broader
+  // AgentMessage union, which includes control messages (branchSummary,
+  // compactionSummary, bashExecution) that carry no `content` field. complete()
+  // receives those as-is, so the contract must admit them. userMessage() and all
+  // LLM-bound messages still set content.
+  content?: string | any[];
   timestamp?: number;
 }
 
