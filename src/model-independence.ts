@@ -87,7 +87,42 @@ export function dropForeignThinking<T extends Msg>(
 // without importing pi's types or its convertToLlm() — same decoupling stance as
 // the rest of this file and ai.ts: pi is a runtime-global, untyped dependency.
 
-const CONTROL_ROLES = new Set(["bashExecution", "branchSummary", "compactionSummary", "custom"]);
+// The real conversational roles pi emits for LLM messages. These are
+// `pi-ai`'s `Message` union discriminants (UserMessage | AssistantMessage |
+// ToolResultMessage) and MUST flow through to the provider untouched — they
+// carry tool-call linkage (toolCallId / tool_use_id) and provider/api/model.
+export const CONVERSATIONAL_ROLES = new Set(["user", "assistant", "toolResult"]);
+
+// pi's session-bookkeeping "control" roles that snorrio knows how to convert to
+// readable text. These are the keys pi declaration-merges into `CustomAgentMessages`
+// (see pi-coding-agent `dist/core/messages.d.ts`).
+export const CONTROL_ROLES = new Set(["bashExecution", "branchSummary", "compactionSummary", "custom"]);
+
+// SINGLE SOURCE OF TRUTH: every session role snorrio knows how to handle =
+// the conversational allowlist + the known control roles. The runtime
+// allowlist-flip in normalizeSessionMessages() and the build-time d.ts canary
+// (tests/pi-role-surface.test.ts) both consume THIS const so they can't drift.
+// Any role pi can emit that is NOT in here is an unknown role: the canary fails
+// at build time, and the runtime fails safe (never forwards it raw).
+export const KNOWN_PI_ROLES: ReadonlySet<string> = new Set([...CONVERSATIONAL_ROLES, ...CONTROL_ROLES]);
+
+// Warn at most once per distinct unknown role. Module-level so the dedupe spans
+// every normalizeSessionMessages() call in the process (recall + DMN read paths).
+const _warnedRoles = new Set<string>();
+
+/**
+ * Emit a one-time stderr warning for a session role snorrio doesn't know how to
+ * handle. stderr (not stdout) so it surfaces both in the recall CLI and in the
+ * episode-daemon log without polluting captured stdout. Deduped per distinct
+ * role — a session full of an unknown role warns once, not once per message.
+ */
+function warnOncePerRole(role: string): void {
+  if (_warnedRoles.has(role)) return;
+  _warnedRoles.add(role);
+  process.stderr.write(
+    `snorrio: unknown session role '${role}' — update normalizeSessionMessages/KNOWN_PI_ROLES\n`,
+  );
+}
 
 // snorrio's own framing of pi's summary bookkeeping (deliberately not pi's wire
 // constants — we don't couple to pi strings, we choose how to present them).
@@ -126,32 +161,50 @@ export function normalizeSessionMessages(messages: RawSessionMessage[]): Message
   const out: Message[] = [];
   for (const m of messages) {
     const role = m.role;
-    if (!role || !CONTROL_ROLES.has(role)) {
-      // Ordinary conversation turn. Spread the ORIGINAL through unchanged so all
-      // top-level fields survive (tool-call linkage like tool_use_id, plus
-      // provider/api/model that downstream thinking transforms read). Only fill
-      // role/content so the strict Message contract holds at runtime too.
+
+    // (1) Conversational turn (or a message with no role at all): spread the
+    // ORIGINAL through unchanged so all top-level fields survive — tool-call
+    // linkage (toolCallId / tool_use_id; dropping the latter caused the 47251a1
+    // provider 400), plus provider/api/model that downstream thinking transforms
+    // read. Only fill role/content so the strict Message contract holds.
+    if (!role || CONVERSATIONAL_ROLES.has(role)) {
       out.push({ ...m, role: role ?? "user", content: (m.content ?? "") as string | any[] });
       continue;
     }
-    if (role === "bashExecution") {
-      if (m.excludeFromContext) continue; // pi marked it hidden (`!!` prefix)
-      const command = typeof m.command === "string" ? m.command : "";
-      const output = typeof m.output === "string" ? m.output : "";
-      const text = `$ ${command}${output ? `\n${output}` : ""}`.trim();
-      if (text) out.push({ role: "user", content: text, timestamp: m.timestamp });
+
+    // (2) Known control/bookkeeping role: convert to readable user text.
+    if (CONTROL_ROLES.has(role)) {
+      // Honor pi's hide flag uniformly across ALL control kinds (redteam flagged
+      // that `custom` ignored what `bashExecution` honored). `!!`-hidden bash
+      // escapes and any other excluded control message are dropped consistently.
+      if (m.excludeFromContext) continue;
+      if (role === "bashExecution") {
+        const command = typeof m.command === "string" ? m.command : "";
+        const output = typeof m.output === "string" ? m.output : "";
+        const text = `$ ${command}${output ? `\n${output}` : ""}`.trim();
+        if (text) out.push({ role: "user", content: text, timestamp: m.timestamp });
+        continue;
+      }
+      if (role === "branchSummary" || role === "compactionSummary") {
+        const summary = typeof m.summary === "string" ? m.summary.trim() : "";
+        if (!summary) continue;
+        const label = role === "branchSummary" ? BRANCH_SUMMARY_LABEL : COMPACTION_SUMMARY_LABEL;
+        out.push({ role: "user", content: `${label}\n${summary}`, timestamp: m.timestamp });
+        continue;
+      }
+      // role === "custom": extension-injected; keep its real content if present.
+      const customText = contentToText(m.content);
+      if (customText) out.push({ role: "user", content: customText, timestamp: m.timestamp });
       continue;
     }
-    if (role === "branchSummary" || role === "compactionSummary") {
-      const summary = typeof m.summary === "string" ? m.summary.trim() : "";
-      if (!summary) continue;
-      const label = role === "branchSummary" ? BRANCH_SUMMARY_LABEL : COMPACTION_SUMMARY_LABEL;
-      out.push({ role: "user", content: `${label}\n${summary}`, timestamp: m.timestamp });
-      continue;
-    }
-    // role === "custom": extension-injected; keep its real content if present.
-    const text = contentToText(m.content);
-    if (text) out.push({ role: "user", content: text, timestamp: m.timestamp });
+
+    // (3) UNKNOWN role — the allowlist-flip's fail-safe default. snorrio does NOT
+    // forward a role it doesn't understand to a provider: a future pi control
+    // role could carry no `content` (=> provider 400) or non-conversational junk.
+    // Warn once, then salvage any readable text as a plain user turn or drop it.
+    warnOncePerRole(role);
+    const unknownText = contentToText(m.content);
+    if (unknownText) out.push({ role: "user", content: unknownText, timestamp: m.timestamp });
   }
   return out;
 }

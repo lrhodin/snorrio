@@ -8,7 +8,17 @@ import {
   THINKING_TYPES,
   normalizeSessionMessages,
   sessionMessagesToLlm,
+  KNOWN_PI_ROLES,
 } from "../src/model-independence.ts";
+
+// Capture stderr writes around fn() so we can assert the warn-once behavior.
+function captureStderr(fn: () => void): string[] {
+  const writes: string[] = [];
+  const orig = process.stderr.write.bind(process.stderr);
+  (process.stderr as any).write = (s: any) => { writes.push(String(s)); return true; };
+  try { fn(); } finally { (process.stderr as any).write = orig; }
+  return writes;
+}
 
 const SESS = join(
   process.env.HOME!,
@@ -131,6 +141,76 @@ test("normalizeSessionMessages: control messages narrowed; every output has cont
   assert.match(text, /\$ ls/, "bash escape rendered compactly");
   assert.match(text, /injected note/, "custom content preserved");
   assert.doesNotMatch(text, /secret/, "hidden bash escape not leaked");
+});
+
+test("allowlist-flip: an UNKNOWN role is caught (warned once + normalized/dropped, never emitted raw)", () => {
+  // Use a role name no other test references so the module-level warn-once Set
+  // isn't polluted by (or polluting) other cases.
+  const ROLE = "futureControlRole_canary1";
+  assert.ok(!KNOWN_PI_ROLES.has(ROLE), "test role must be unknown to snorrio");
+
+  let out: any[] = [];
+  const writes = captureStderr(() => {
+    out = normalizeSessionMessages([
+      { role: "user", content: "hi" },
+      { role: ROLE, content: "some salvageable text", timestamp: 1 }, // has text -> salvaged as user
+      { role: ROLE, customField: 42, timestamp: 2 },                  // no content -> dropped
+      { role: ROLE, content: "more text", timestamp: 3 },             // 2nd salvage, same role
+    ] as any);
+  });
+
+  // The unknown role NEVER reaches the wire as itself.
+  assert.ok(out.every((m) => m.role !== ROLE), "unknown role not emitted raw");
+  // Salvaged messages are normalized to a real conversational role.
+  assert.ok(out.every((m) => KNOWN_PI_ROLES.has(m.role)), "every emitted role is known");
+  // The content-less unknown message was dropped (1 user + 2 salvaged = 3).
+  assert.equal(out.length, 3, "content-less unknown message dropped, text-bearing ones salvaged");
+
+  // Warned exactly ONCE for the distinct role despite 3 unknown messages.
+  const warns = writes.filter((w) => w.includes(ROLE));
+  assert.equal(warns.length, 1, "warn-once per distinct role (deduped across messages)");
+  assert.match(warns[0], new RegExp(`unknown session role '${ROLE}'`));
+  assert.match(warns[0], /normalizeSessionMessages\/KNOWN_PI_ROLES/);
+});
+
+test("allowlist-flip: conversational roles + toolResult pass through with all fields (the load-bearing case)", () => {
+  const raw = [
+    { role: "user", content: "q", timestamp: 1 },
+    { role: "assistant", content: [{ type: "text", text: "a" }], provider: "anthropic", api: "anthropic-messages", model: "claude-opus", timestamp: 2 },
+    // Real pi toolResult uses toolCallId; tool_use_id is the Anthropic wire field
+    // whose loss caused the 47251a1 provider 400. Both must survive the spread.
+    { role: "toolResult", toolCallId: "call_123", tool_use_id: "tu_123", toolName: "bash", content: [{ type: "text", text: "out" }], isError: false, timestamp: 3 },
+  ];
+
+  let out: any[] = [];
+  const writes = captureStderr(() => { out = normalizeSessionMessages(raw as any); });
+
+  assert.equal(out.length, 3, "all conversational turns survive");
+  assert.equal(writes.length, 0, "no spurious unknown-role warnings for real roles");
+
+  const tr = out.find((m) => m.role === "toolResult") as any;
+  assert.ok(tr, "toolResult role preserved, not normalized away");
+  assert.equal(tr.toolCallId, "call_123", "toolCallId survives the spread");
+  assert.equal(tr.tool_use_id, "tu_123", "tool_use_id survives the spread (47251a1 bug guard)");
+  assert.equal(tr.toolName, "bash", "other tool linkage fields survive");
+
+  const asst = out.find((m) => m.role === "assistant") as any;
+  assert.equal(asst.provider, "anthropic", "provider survives for downstream thinking transforms");
+  assert.equal(asst.api, "anthropic-messages", "api survives");
+  assert.equal(asst.model, "claude-opus", "model survives");
+});
+
+test("allowlist-flip: custom honors excludeFromContext consistently with bashExecution", () => {
+  const raw = [
+    { role: "custom", customType: "note", content: "visible note", display: true, timestamp: 1 },
+    { role: "custom", customType: "secretNote", content: "hidden note", excludeFromContext: true, timestamp: 2 },
+    { role: "bashExecution", command: "ls", output: "a", excludeFromContext: true, timestamp: 3 },
+  ];
+  const out = normalizeSessionMessages(raw as any);
+  const text = out.map((m) => (typeof m.content === "string" ? m.content : "")).join("\n");
+  assert.match(text, /visible note/, "non-hidden custom kept");
+  assert.doesNotMatch(text, /hidden note/, "excludeFromContext custom dropped (now consistent with bash)");
+  assert.equal(out.length, 1, "both excluded control messages dropped");
 });
 
 test("sessionMessagesToLlm: composes normalization + readable-thinking", () => {
