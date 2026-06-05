@@ -248,7 +248,7 @@ async function rebuildCache(level: string, refs: string[], prefix: string = "") 
 
   const rebuild = async (ref: string) => {
     try {
-      const summary = await recall(ref, prompts[level], "opus");
+      const summary = await recall(ref, prompts[level], null);
       if (summary && !summary.startsWith("[recall:"))
         atomicWrite(join(CACHE_DIR, dirs[level], `${ref}.md`), summary as string);
       log(`${prefix}    ${ref} ✓`);
@@ -698,7 +698,7 @@ function startFlushWatcher() {
     for (const dateStr of dates) {
       try {
         log(`  Regenerating day cache: ${dateStr}`);
-        const daySummary = await recall(dateStr, CACHE_Q_DAY, "opus");
+        const daySummary = await recall(dateStr, CACHE_Q_DAY, null);
         if (daySummary && !daySummary.startsWith("[recall:")) {
           atomicWrite(join(CACHE_DIR, "days", `${dateStr}.md`), daySummary as string);
         }

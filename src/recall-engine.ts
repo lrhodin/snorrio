@@ -139,7 +139,7 @@ Answer directly from your experience. Be precise — include exact commands, err
 
 If you don't know something, say so.`;
 
-async function recallPiSession(sessionFile: string, question: string, modelSpec: string, options: { context?: boolean; onChunk?: OnChunk } = {}) {
+async function recallPiSession(sessionFile: string, question: string, modelSpec: string | null, options: { context?: boolean; onChunk?: OnChunk } = {}) {
   const { loadEntriesFromFile, buildSessionContext } = await getPiSessionManager();
 
   const entries = loadEntriesFromFile(sessionFile);
@@ -172,7 +172,7 @@ async function recallPiSession(sessionFile: string, question: string, modelSpec:
   return apiCallStream([...readableMessages, userMessage(q)], systemPrompt, modelSpec, options.onChunk);
 }
 
-function recallSession(ref: string, question: string, modelSpec: string, options: { context?: boolean; onChunk?: OnChunk } = {}) {
+function recallSession(ref: string, question: string, modelSpec: string | null, options: { context?: boolean; onChunk?: OnChunk } = {}) {
   // Direct .jsonl path
   if (ref.endsWith(".jsonl")) {
     if (!existsSync(ref)) return `[recall: file not found — ${ref}]`;
@@ -237,7 +237,7 @@ function loadEpisodes(dateStr: string) {
   return episodes;
 }
 
-function recallDay(dateStr: string, question: string, modelSpec: string, onChunk?: OnChunk) {
+function recallDay(dateStr: string, question: string, modelSpec: string | null, onChunk?: OnChunk) {
   const episodes = loadEpisodes(dateStr);
   if (episodes.length === 0) return `[recall: no episodes found for ${dateStr}]`;
 
@@ -274,7 +274,7 @@ function weekDates(weekStr: string) {
   return dates;
 }
 
-async function recallWeek(weekStr: string, question: string, modelSpec: string, onChunk?: OnChunk) {
+async function recallWeek(weekStr: string, question: string, modelSpec: string | null, onChunk?: OnChunk) {
   const dates = weekDates(weekStr);
   const daySummaries: Array<{ date: string; episodeCount: number; summary: string }> = [];
 
@@ -344,7 +344,7 @@ function weekHasData(weekStr: string) {
   return dates.some(d => loadEpisodes(d).length > 0);
 }
 
-async function recallMonth(monthStr: string, question: string, modelSpec: string, onChunk?: OnChunk) {
+async function recallMonth(monthStr: string, question: string, modelSpec: string | null, onChunk?: OnChunk) {
   const weeks = monthWeeks(monthStr);
   const weekSummaries: Array<{ week: string; activeDays: number; summary: string }> = [];
 
@@ -397,7 +397,7 @@ function monthHasData(monthStr: string) {
   return weeks.some(w => weekHasData(w));
 }
 
-async function recallQuarter(quarterStr: string, question: string, modelSpec: string, onChunk?: OnChunk) {
+async function recallQuarter(quarterStr: string, question: string, modelSpec: string | null, onChunk?: OnChunk) {
   const months = quarterMonths(quarterStr);
   const monthSummaries: Array<{ month: string; summary: string }> = [];
 
@@ -453,7 +453,7 @@ function quarterHasData(quarterStr: string) {
   return months.some(m => monthHasData(m));
 }
 
-async function recallYear(yearStr: string, question: string, modelSpec: string, onChunk?: OnChunk) {
+async function recallYear(yearStr: string, question: string, modelSpec: string | null, onChunk?: OnChunk) {
   const quarters = yearQuarters(yearStr);
   const quarterSummaries: Array<{ quarter: string; summary: string }> = [];
 
@@ -512,7 +512,7 @@ type OnChunk = (accumulated: string) => void;
 let _cliAbortSignal: AbortSignal | undefined;
 let _cliEmitThinking = false;
 
-async function apiCall(messages: any[], systemPrompt: string, modelSpec: string) {
+async function apiCall(messages: any[], systemPrompt: string, modelSpec: string | null) {
   const result = await complete(messages, systemPrompt, modelSpec);
 
   if (result.stopReason === "error") {
@@ -524,7 +524,7 @@ async function apiCall(messages: any[], systemPrompt: string, modelSpec: string)
   return getText(result);
 }
 
-async function apiCallStream(messages: any[], systemPrompt: string, modelSpec: string, onChunk?: OnChunk) {
+async function apiCallStream(messages: any[], systemPrompt: string, modelSpec: string | null, onChunk?: OnChunk) {
   if (!onChunk) return apiCall(messages, systemPrompt, modelSpec);
 
   // Pass the CLI abort signal through to pi-ai so SIGINT cancels the in-flight
@@ -575,7 +575,7 @@ async function apiCallStream(messages: any[], systemPrompt: string, modelSpec: s
 // PUBLIC API
 // ============================================================================
 
-export async function recall(ref: string, question: string, modelSpec = "opus", options: { context?: boolean; onChunk?: OnChunk } = {}) {
+export async function recall(ref: string, question: string, modelSpec: string | null = null, options: { context?: boolean; onChunk?: OnChunk } = {}) {
   const type = refType(ref);
   const { onChunk } = options;
 
@@ -614,7 +614,10 @@ try {
 if (isMain) {
   const args = process.argv.slice(2);
 
-  let modelSpec = "opus";
+  // No pin: null falls through resolveModel to the active pi model
+  // (config.model, then pi's defaultProvider/defaultModel). See TODO.md for
+  // making recall track the *session's own* model rather than the active one.
+  let modelSpec: string | null = null;
   const modelIdx = args.indexOf("--model");
   if (modelIdx !== -1 && args[modelIdx + 1]) {
     modelSpec = args[modelIdx + 1];
@@ -631,7 +634,7 @@ if (isMain) {
   if (args.length < 2) {
     console.error("Usage: recall [--model <model>] [--context] <ref> \"question\"");
     console.error("  ref: session UUID, .jsonl path, YYYY-MM-DD (day), YYYY-Www (week), YYYY-MM (month), YYYY-QN (quarter), YYYY (year)");
-    console.error("  models: haiku, sonnet, opus (default)");
+    console.error("  models: haiku, sonnet, opus, or provider/model-id (default: active pi model)");
     console.error("  --context: load temporal context from when the session ran (situated witness)");
     process.exit(1);
   }
