@@ -8,6 +8,59 @@ set -euo pipefail
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 
+# ── pi-drift warn guard ──────────────────────────────────────────────────────
+# WARN-ONLY (never blocks, never non-zero). Warns at commit time when the
+# repo-local pi packages used for typecheck/tests (node_modules/@earendil-works/*)
+# drift from the runtime/global pi that production recall/snorrio actually call.
+# Drift means we validate against a STALE pi while shipping against a NEWER one
+# — a silent blind spot that `pi update` (bumps global, leaves repo-local) opens.
+# Failure-safe under `set -euo pipefail`: a machine without pi, or with missing/
+# unreadable files, commits normally with NO warning and NO abort.
+_pidrift_guard() {
+  # Read .version from an absolute package.json path; empty string on any miss.
+  _pidrift_ver() { node -p "require('$1').version" 2>/dev/null || true; }
+
+  # Resolve the runtime pi the way production does: `which pi` WITHOUT the
+  # repo-local node_modules/.bin on PATH. Inside npm/hook contexts that dir is
+  # often prepended, and node_modules/.bin/pi is a symlink to the repo-local
+  # copy — so leaving it on PATH would make us compare the repo-local pi against
+  # itself and never detect drift.
+  local localbin="${REPO_ROOT}/node_modules/.bin"
+  local cleanpath pi_bin pi_real runtime_root
+  cleanpath="$(printf '%s' "${PATH:-}" | tr ':' '\n' | grep -vxF "$localbin" | paste -sd: - || true)"
+  pi_bin="$(PATH="$cleanpath" command -v pi 2>/dev/null || true)"
+  [ -n "$pi_bin" ] || return 0
+  # realpath via node (guaranteed present); strip /dist/.* to get the pi root.
+  pi_real="$(node -e 'process.stdout.write(require("fs").realpathSync(process.argv[1]))' "$pi_bin" 2>/dev/null || true)"
+  [ -n "$pi_real" ] || return 0
+  runtime_root="$(printf '%s' "$pi_real" | sed -E 's#/dist/.*##' || true)"
+  [ -n "$runtime_root" ] || return 0
+
+  local pkg local_pj runtime_pj lv rv
+  for pkg in pi-coding-agent pi-ai; do
+    local_pj="${REPO_ROOT}/node_modules/@earendil-works/${pkg}/package.json"
+    if [ "$pkg" = "pi-coding-agent" ]; then
+      runtime_pj="${runtime_root}/package.json"
+    else
+      # mirrors snorrio's own importPiAi resolution (pi-ai nested under pi root)
+      runtime_pj="${runtime_root}/node_modules/@earendil-works/pi-ai/package.json"
+    fi
+    lv="$(_pidrift_ver "$local_pj")"
+    rv="$(_pidrift_ver "$runtime_pj")"
+    # Warn ONLY when both versions are readable AND they differ; else skip silently.
+    if [ -n "$lv" ] && [ -n "$rv" ] && [ "$lv" != "$rv" ]; then
+      echo ""
+      echo "⚠️  snorrio: pi drift on @earendil-works/${pkg} —"
+      echo "     repo-local (build/typecheck): ${lv}"
+      echo "     runtime/global pi:            ${rv}"
+      echo "     → run \`npm install\` in snorrio to resync the build/typecheck copy with your runtime pi."
+      echo ""
+    fi
+  done
+  return 0
+}
+_pidrift_guard || true
+
 # Run when staged changes touch TS under typechecked paths OR tests.
 STAGED=$(git diff --cached --name-only --diff-filter=ACMR \
   | grep -E '^(src|extensions|skills|tests)/.*\.ts$' || true)
