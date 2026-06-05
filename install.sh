@@ -94,7 +94,7 @@ install_node() {
 install_pi() {
   if command -v pi &>/dev/null; then return; fi
   echo "  installing pi..."
-  npm install -g @mariozechner/pi-coding-agent
+  npm install -g @earendil-works/pi-coding-agent
 }
 
 # ── Snorrio ──

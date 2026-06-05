@@ -1,7 +1,7 @@
 // Pi extension — injects snorrio context and setup detection at session start.
 // All temporal logic lives in src/context.ts. This is the pi glue.
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readFileSync, existsSync, readdirSync } from "node:fs";

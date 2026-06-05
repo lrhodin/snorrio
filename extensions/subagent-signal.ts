@@ -1,7 +1,7 @@
 // Pi extension — signals subagent turn completion via tmux.
 // Only active when SUBAGENT_SESSION env var is set (by subagent spawn).
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { existsSync, writeFileSync, unlinkSync } from "fs";
 
 export default function (pi: ExtensionAPI) {

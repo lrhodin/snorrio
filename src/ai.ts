@@ -79,8 +79,12 @@ function findPiRoot(): string | null {
   } catch {
     try {
       const globalRoot = execSync("npm root -g", { encoding: "utf8", stdio: "pipe" }).trim();
-      const candidate = join(globalRoot, "@mariozechner/pi-coding-agent");
-      if (existsSync(candidate)) return candidate;
+      // pi-coding-agent was published under @mariozechner, then renamed to
+      // @earendil-works. Prefer the new scope, fall back to the old one.
+      for (const scope of ["@earendil-works/pi-coding-agent", "@mariozechner/pi-coding-agent"]) {
+        const candidate = join(globalRoot, scope);
+        if (existsSync(candidate)) return candidate;
+      }
     } catch {}
   }
   return null;
