@@ -289,8 +289,10 @@ async function recallWeek(weekStr: string, question: string, modelSpec: string |
       summary = readFileSync(cachePath, "utf8").trim();
     } else {
       summary = await recallDay(dateStr, "Write the narrative of this day. Not a checklist — an account of what happened, what was worked on, what got decided, what changed, and why. Track commitments made for today but don't carry weekly or longer-term goals — mention them naturally so higher temporal levels can pick them up. Include session IDs so any thread can be traced back to its source session.", modelSpec) as string;
-      mkdirSync(join(CACHE_DIR, "days"), { recursive: true });
-      writeFileSync(cachePath, summary);
+      if (summary && !summary.startsWith("[recall:")) {
+        mkdirSync(join(CACHE_DIR, "days"), { recursive: true });
+        writeFileSync(cachePath, summary);
+      }
     }
 
     daySummaries.push({ date: dateStr, episodeCount: episodes.length, summary });
@@ -358,8 +360,10 @@ async function recallMonth(monthStr: string, question: string, modelSpec: string
       summary = readFileSync(cachePath, "utf8").trim();
     } else {
       summary = await recallWeek(weekStr, "Write the narrative of this week. Not a checklist — an essay that identifies the main threads, arc, and trajectory. What's developing across multiple days? What started, what stalled, what shifted? Operate at week resolution — don't repeat daily details, surface the patterns that are only visible across days. Reference specific dates so the reader can drill down.", modelSpec) as string;
-      mkdirSync(join(CACHE_DIR, "weeks"), { recursive: true });
-      writeFileSync(cachePath, summary);
+      if (summary && !summary.startsWith("[recall:")) {
+        mkdirSync(join(CACHE_DIR, "weeks"), { recursive: true });
+        writeFileSync(cachePath, summary);
+      }
     }
 
     const dates = weekDates(weekStr);
@@ -411,8 +415,10 @@ async function recallQuarter(quarterStr: string, question: string, modelSpec: st
       summary = readFileSync(cachePath, "utf8").trim();
     } else {
       summary = await recallMonth(monthStr, "Write the narrative of this month. Identify the trajectory — what emerged, what shifted, what's building. Cover key decisions, what shipped, and the personal arc. Operate at month resolution — don't repeat weekly details, surface what's visible across weeks. Reference specific weeks so the reader can drill down.", modelSpec) as string;
-      mkdirSync(join(CACHE_DIR, "months"), { recursive: true });
-      writeFileSync(cachePath, summary);
+      if (summary && !summary.startsWith("[recall:")) {
+        mkdirSync(join(CACHE_DIR, "months"), { recursive: true });
+        writeFileSync(cachePath, summary);
+      }
     }
 
     monthSummaries.push({ month: monthStr, summary });
@@ -467,8 +473,10 @@ async function recallYear(yearStr: string, question: string, modelSpec: string |
       summary = readFileSync(cachePath, "utf8").trim();
     } else {
       summary = await recallQuarter(quarterStr, "Write a narrative of this quarter. What's the arc — what materialized that wasn't there at the start, what's building? Don't restate monthly details — just what's visible from this altitude. Reference specific months so the reader can drill down.", modelSpec) as string;
-      mkdirSync(join(CACHE_DIR, "quarters"), { recursive: true });
-      writeFileSync(cachePath, summary);
+      if (summary && !summary.startsWith("[recall:")) {
+        mkdirSync(join(CACHE_DIR, "quarters"), { recursive: true });
+        writeFileSync(cachePath, summary);
+      }
     }
 
     quarterSummaries.push({ quarter: quarterStr, summary });
@@ -512,8 +520,16 @@ type OnChunk = (accumulated: string) => void;
 let _cliAbortSignal: AbortSignal | undefined;
 let _cliEmitThinking = false;
 
+// Test seam: lets tests substitute the non-streamed LLM boundary without a
+// network call (e.g. simulate a 429/overloaded sub-summary). Production never
+// calls the setter, so the default binding (`complete`) is always in effect.
+let _complete: typeof complete = complete;
+export function __setCompleteForTest(fn: typeof complete | null): void {
+  _complete = fn ?? complete;
+}
+
 async function apiCall(messages: any[], systemPrompt: string, modelSpec: string | null) {
-  const result = await complete(messages, systemPrompt, modelSpec);
+  const result = await _complete(messages, systemPrompt, modelSpec);
 
   if (result.stopReason === "error") {
     const errMsg = result.errorMessage || "unknown API error";
