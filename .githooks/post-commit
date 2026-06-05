@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# snorrio post-commit: remind to push.
+#
+# `pi update` updates git-sourced packages (snorrio is one) by running
+# `git reset --hard <origin/main>` on this checkout. Any commit that is NOT
+# pushed is silently destroyed on the next `pi update`. This bit us hard on
+# 2026-06-05 (a week of unpushed work orphaned across three updates).
+#
+# A post-commit hook cannot block and must not push for you silently — it just
+# nags. Push is the only durable safe-state. Activated by `npm run install-hooks`
+# (core.hooksPath = .githooks).
+set -uo pipefail
+
+upstream="$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null || true)"
+[ -z "$upstream" ] && exit 0
+
+ahead="$(git rev-list --count "${upstream}..HEAD" 2>/dev/null || echo 0)"
+if [ "${ahead:-0}" -gt 0 ]; then
+  echo ""
+  echo "⚠️  snorrio: HEAD is ${ahead} commit(s) ahead of ${upstream} — NOT pushed."
+  echo "   pi update runs 'git reset --hard ${upstream}' and will DESTROY unpushed commits."
+  echo "   → run:  git push"
+  echo ""
+fi
+exit 0
