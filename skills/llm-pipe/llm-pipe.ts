@@ -4,6 +4,7 @@
 // Model can be an alias (haiku, sonnet, opus), full spec (github-copilot/claude-haiku-4.5),
 // or omitted to use the per-tool default from ~/snorrio/config/config.json.
 
+import { fstatSync } from "fs";
 import { stream, userMessage } from "../../src/ai.ts";
 
 // --- Stdin ---
@@ -12,6 +13,19 @@ async function readStdin() {
   const chunks = [];
   for await (const chunk of process.stdin) chunks.push(chunk);
   return Buffer.concat(chunks).toString("utf8");
+}
+
+// Detect actually-piped stdin. isTTY is false for any non-terminal (including
+// inherited bash stdin from `bash -c`), which would hang waiting for EOF.
+// Only read if stdin is a pipe (FIFO) or a regular file (redirected from one).
+function hasPipedStdin(): boolean {
+  if (process.stdin.isTTY) return false;
+  try {
+    const st = fstatSync(0);
+    return st.isFIFO() || st.isFile();
+  } catch {
+    return false;
+  }
 }
 
 // --- Main ---
@@ -34,7 +48,7 @@ async function main() {
   const modelSpec = positional[1] || null;
 
   let input = "";
-  if (!process.stdin.isTTY) input = await readStdin();
+  if (hasPipedStdin()) input = await readStdin();
 
   const content = input ? `${prompt}\n\n${input}` : prompt;
 
