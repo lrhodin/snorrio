@@ -22,6 +22,7 @@ import { pathToFileURL } from "url";
 import { complete, stream as aiStream, getText, userMessage, SNORRIO_HOME, piRoot, getTimezone, type Message } from "./ai.ts";
 import { sessionMessagesToLlm, type RawSessionMessage } from "./model-independence.ts";
 import { findSession, sessionIdFromPath, type SessionInfo } from "./session-meta.ts";
+import { resolveShaAt, readFileAtSha } from "./versioned-read.ts";
 
 const HOME = process.env.HOME!;
 const PI_SESSIONS_DIR = join(HOME, ".pi/agent/sessions");
@@ -274,7 +275,7 @@ function weekDates(weekStr: string) {
   return dates;
 }
 
-async function recallWeek(weekStr: string, question: string, modelSpec: string | null, onChunk?: OnChunk) {
+async function recallWeek(weekStr: string, question: string, modelSpec: string | null, onChunk?: OnChunk, atSha?: string | null) {
   const dates = weekDates(weekStr);
   const daySummaries: Array<{ date: string; episodeCount: number; summary: string }> = [];
 
@@ -285,7 +286,15 @@ async function recallWeek(weekStr: string, question: string, modelSpec: string |
     const cachePath = join(CACHE_DIR, "days", `${dateStr}.md`);
     let summary: string;
 
-    if (existsSync(cachePath)) {
+    if (atSha) {
+      // Versioned read (--at): the day cache as it existed at the resolved
+      // commit. Absent at that commit ⇒ skip the day — never regenerate from
+      // live data, never write back (the contemporaneous view stays faithful
+      // and the live cache stays unpoisoned).
+      const past = readFileAtSha(atSha, `cache/days/${dateStr}.md`);
+      if (past === null) continue;
+      summary = past.trim();
+    } else if (existsSync(cachePath)) {
       summary = readFileSync(cachePath, "utf8").trim();
     } else {
       summary = await recallDay(dateStr, "Write the narrative of this day. Not a checklist — an account of what happened, what was worked on, what got decided, what changed, and why. Track commitments made for today but don't carry weekly or longer-term goals — mention them naturally so higher temporal levels can pick them up. Include session IDs so any thread can be traced back to its source session.", modelSpec) as string;
@@ -346,7 +355,7 @@ function weekHasData(weekStr: string) {
   return dates.some(d => loadEpisodes(d).length > 0);
 }
 
-async function recallMonth(monthStr: string, question: string, modelSpec: string | null, onChunk?: OnChunk) {
+async function recallMonth(monthStr: string, question: string, modelSpec: string | null, onChunk?: OnChunk, atSha?: string | null) {
   const weeks = monthWeeks(monthStr);
   const weekSummaries: Array<{ week: string; activeDays: number; summary: string }> = [];
 
@@ -356,7 +365,12 @@ async function recallMonth(monthStr: string, question: string, modelSpec: string
     const cachePath = join(CACHE_DIR, "weeks", `${weekStr}.md`);
     let summary: string;
 
-    if (existsSync(cachePath)) {
+    if (atSha) {
+      // Versioned read (--at) — see recallWeek for the contract.
+      const past = readFileAtSha(atSha, `cache/weeks/${weekStr}.md`);
+      if (past === null) continue;
+      summary = past.trim();
+    } else if (existsSync(cachePath)) {
       summary = readFileSync(cachePath, "utf8").trim();
     } else {
       summary = await recallWeek(weekStr, "Write the narrative of this week. Not a checklist — an essay that identifies the main threads, arc, and trajectory. What's developing across multiple days? What started, what stalled, what shifted? Operate at week resolution — don't repeat daily details, surface the patterns that are only visible across days. Reference specific dates so the reader can drill down.", modelSpec) as string;
@@ -401,7 +415,7 @@ function monthHasData(monthStr: string) {
   return weeks.some(w => weekHasData(w));
 }
 
-async function recallQuarter(quarterStr: string, question: string, modelSpec: string | null, onChunk?: OnChunk) {
+async function recallQuarter(quarterStr: string, question: string, modelSpec: string | null, onChunk?: OnChunk, atSha?: string | null) {
   const months = quarterMonths(quarterStr);
   const monthSummaries: Array<{ month: string; summary: string }> = [];
 
@@ -411,7 +425,12 @@ async function recallQuarter(quarterStr: string, question: string, modelSpec: st
     const cachePath = join(CACHE_DIR, "months", `${monthStr}.md`);
     let summary: string;
 
-    if (existsSync(cachePath)) {
+    if (atSha) {
+      // Versioned read (--at) — see recallWeek for the contract.
+      const past = readFileAtSha(atSha, `cache/months/${monthStr}.md`);
+      if (past === null) continue;
+      summary = past.trim();
+    } else if (existsSync(cachePath)) {
       summary = readFileSync(cachePath, "utf8").trim();
     } else {
       summary = await recallMonth(monthStr, "Write the narrative of this month. Identify the trajectory — what emerged, what shifted, what's building. Cover key decisions, what shipped, and the personal arc. Operate at month resolution — don't repeat weekly details, surface what's visible across weeks. Reference specific weeks so the reader can drill down.", modelSpec) as string;
@@ -437,6 +456,9 @@ You operate at the highest temporal resolution available. Patterns, trajectories
   const messages = [userMessage(`Question: ${question}\n\n---\n\nContext (month summaries for ${quarterStr}):\n\n${context}`)];
   const result = await apiCallStream(messages, systemPrompt, modelSpec, onChunk);
 
+  // Never persist an answer derived from a historical (--at) view.
+  if (atSha) return result;
+
   const cachePath = join(CACHE_DIR, "quarters", `${quarterStr}.md`);
   if (!existsSync(cachePath) && result && !result.startsWith("[recall:")) {
     mkdirSync(join(CACHE_DIR, "quarters"), { recursive: true });
@@ -459,7 +481,7 @@ function quarterHasData(quarterStr: string) {
   return months.some(m => monthHasData(m));
 }
 
-async function recallYear(yearStr: string, question: string, modelSpec: string | null, onChunk?: OnChunk) {
+async function recallYear(yearStr: string, question: string, modelSpec: string | null, onChunk?: OnChunk, atSha?: string | null) {
   const quarters = yearQuarters(yearStr);
   const quarterSummaries: Array<{ quarter: string; summary: string }> = [];
 
@@ -469,7 +491,12 @@ async function recallYear(yearStr: string, question: string, modelSpec: string |
     const cachePath = join(CACHE_DIR, "quarters", `${quarterStr}.md`);
     let summary: string;
 
-    if (existsSync(cachePath)) {
+    if (atSha) {
+      // Versioned read (--at) — see recallWeek for the contract.
+      const past = readFileAtSha(atSha, `cache/quarters/${quarterStr}.md`);
+      if (past === null) continue;
+      summary = past.trim();
+    } else if (existsSync(cachePath)) {
       summary = readFileSync(cachePath, "utf8").trim();
     } else {
       summary = await recallQuarter(quarterStr, "Write a narrative of this quarter. What's the arc — what materialized that wasn't there at the start, what's building? Don't restate monthly details — just what's visible from this altitude. Reference specific months so the reader can drill down.", modelSpec) as string;
@@ -498,6 +525,9 @@ Name specific quarters, months, or weeks when referencing detail so the caller c
 
   const messages = [userMessage(`Question: ${question}\n\n---\n\nContext (quarter summaries for ${yearStr}):\n\n${context}`)];
   const result = await apiCallStream(messages, systemPrompt, modelSpec, onChunk);
+
+  // Never persist an answer derived from a historical (--at) view.
+  if (atSha) return result;
 
   const cachePath = join(CACHE_DIR, "years", `${yearStr}.md`);
   if (!existsSync(cachePath) && result && !result.startsWith("[recall:")) {
@@ -591,15 +621,34 @@ async function apiCallStream(messages: any[], systemPrompt: string, modelSpec: s
 // PUBLIC API
 // ============================================================================
 
-export async function recall(ref: string, question: string, modelSpec: string | null = null, options: { context?: boolean; onChunk?: OnChunk } = {}) {
+export async function recall(ref: string, question: string, modelSpec: string | null = null, options: { context?: boolean; onChunk?: OnChunk; at?: string } = {}) {
   const type = refType(ref);
   const { onChunk } = options;
 
+  // --at <ISO>: read caches as they existed at that wall-clock time, via the
+  // data repo (content-addressed `git show`, never checkout). Resolve the
+  // commit ONCE here so every cache read in the recall sees one consistent
+  // snapshot.
+  let atSha: string | null = null;
+  if (options.at) {
+    if (type === "session" || type === "day") {
+      return `[recall: --at is only supported for cache-backed refs (week/month/quarter/year) — ${type} refs read ${type === "day" ? "episodes" : "the raw session"} directly]`;
+    }
+    const t = new Date(options.at);
+    if (isNaN(t.getTime())) return `[recall: invalid --at timestamp — ${options.at}]`;
+    try {
+      atSha = resolveShaAt(t.toISOString());
+    } catch (err: any) {
+      return `[recall: versioned read unavailable — ${err.message}]`;
+    }
+    if (!atSha) return `[recall: no commit in data repo before ${t.toISOString()} — history starts later]`;
+  }
+
   if (type === "day") return recallDay(ref, question, modelSpec, onChunk);
-  if (type === "week") return recallWeek(ref, question, modelSpec, onChunk);
-  if (type === "month") return recallMonth(ref, question, modelSpec, onChunk);
-  if (type === "quarter") return recallQuarter(ref, question, modelSpec, onChunk);
-  if (type === "year") return recallYear(ref, question, modelSpec, onChunk);
+  if (type === "week") return recallWeek(ref, question, modelSpec, onChunk, atSha);
+  if (type === "month") return recallMonth(ref, question, modelSpec, onChunk, atSha);
+  if (type === "quarter") return recallQuarter(ref, question, modelSpec, onChunk, atSha);
+  if (type === "year") return recallYear(ref, question, modelSpec, onChunk, atSha);
 
   // Session
   return recallSession(ref, question, modelSpec, { context: options.context, onChunk });
@@ -647,11 +696,23 @@ if (isMain) {
     args.splice(contextIdx, 1);
   }
 
+  let at: string | undefined;
+  const atIdx = args.indexOf("--at");
+  if (atIdx !== -1) {
+    if (!args[atIdx + 1]) {
+      console.error("recall: --at requires an ISO timestamp argument");
+      process.exit(1);
+    }
+    at = args[atIdx + 1];
+    args.splice(atIdx, 2);
+  }
+
   if (args.length < 2) {
-    console.error("Usage: recall [--model <model>] [--context] <ref> \"question\"");
+    console.error("Usage: recall [--model <model>] [--context] [--at <ISO-timestamp>] <ref> \"question\"");
     console.error("  ref: session UUID, .jsonl path, YYYY-MM-DD (day), YYYY-Www (week), YYYY-MM (month), YYYY-QN (quarter), YYYY (year)");
     console.error("  models: haiku, sonnet, opus, or provider/model-id (default: active pi model)");
     console.error("  --context: load temporal context from when the session ran (situated witness)");
+    console.error("  --at: read caches as they existed at that time (week/month/quarter/year refs; needs the versioned data repo)");
     process.exit(1);
   }
 
@@ -680,7 +741,7 @@ if (isMain) {
   process.on("SIGTERM", onSignal);
 
   try {
-    const answer = await recall(ref, question, modelSpec, { context, onChunk });
+    const answer = await recall(ref, question, modelSpec, { context, onChunk, at });
 
     // Hard-fail on provider error (e.g. overload/429). Surface to stderr, exit
     // non-zero — mirrors the non-streaming apiCall() error contract.

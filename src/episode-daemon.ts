@@ -38,6 +38,7 @@ import { hostname as osHostname } from "os";
 import { complete, getText, userMessage, SNORRIO_HOME, piRoot, getTimezone, CONFIG_PATH, type Message } from "./ai.ts";
 import { sessionMessagesToLlm, type RawSessionMessage } from "./model-independence.ts";
 import { atomicWriteFile as atomicWrite } from "./atomic-write.ts";
+import { ensureDataRepo, commitDataRepo } from "./data-repo.ts";
 import { recall } from "./recall-engine.ts";
 import { decideCascade, dateToWeek, monthToQuarter, type CascadeLevel } from "./cascade-decision.ts";
 import {
@@ -199,7 +200,8 @@ async function generateEpisode(filePath: string) {
   const text = getText(result);
   if (!text?.trim()) { log(`  Empty output: ${id.slice(0, 8)}`); return null; }
 
-  const fm = buildFrontmatter("pi", filePath, end || start || new Date().toISOString());
+  const timestamp = end || start || new Date().toISOString();
+  const fm = buildFrontmatter("pi", filePath, timestamp);
   const dir = join(EPISODES_DIR, dateStr);
   mkdirSync(dir, { recursive: true });
   const epPath = join(dir, `${id}.md`);
@@ -209,9 +211,16 @@ async function generateEpisode(filePath: string) {
 
   if (!globalThis._skipCascade) {
     await cascadeForDate(dateStr);
+    // One commit per cascade batch: the triggering episode + every regenerated
+    // cache. Author date = world-time of the triggering session; committer
+    // date = now. Never throws — a git failure must not block memory.
+    commitDataRepo({
+      message: `cascade ${dateStr}: episode ${id.slice(0, 8)} → day/week/month/quarter/year`,
+      authorDate: timestamp,
+    });
   }
 
-  return { id, dateStr, path: epPath };
+  return { id, dateStr, path: epPath, timestamp };
 }
 
 // ============================================================================
@@ -459,6 +468,10 @@ async function sweep() {
   await validateCaches();
 
   globalThis._skipCascade = false;
+  // Version the sweep batch. No single triggering session → author date = now.
+  commitDataRepo({
+    message: `sweep ${new Date().toISOString().slice(0, 10)}: ${ok} episodes, ${touchedDays.size} days touched`,
+  });
   log(`Sweep done: ${ok} episodes, ${touchedDays.size} days touched`);
 }
 
@@ -656,6 +669,9 @@ async function reprocess(rangeStr: string, depthStr?: string) {
     await rebuildCache("year", [range.ref]);
   }
 
+  // Version the reprocess batch. No single triggering session → author date = now.
+  commitDataRepo({ message: `reprocess ${range.ref} from ${depth}` });
+
   log("Reprocess complete.");
 }
 
@@ -681,13 +697,17 @@ function startFlushWatcher() {
     // Phase 1: Generate episodes (skip cascade — we'll do it ourselves)
     globalThis._skipCascade = true;
     let processed = 0, failed = 0;
+    let latestTs: string | null = null; // world-time of the latest triggering session
     const dates = new Set<string>();
     for (const [filePath] of pending) {
       if (inflight.has(filePath)) continue;
       inflight.add(filePath);
       try {
         const r = await generateEpisode(filePath);
-        if (r) { processed++; dates.add(r.dateStr); }
+        if (r) {
+          processed++; dates.add(r.dateStr);
+          if (!latestTs || r.timestamp > latestTs) latestTs = r.timestamp;
+        }
         else { failed++; }
       } catch (err: any) { log(`Flush error: ${err.message}`); failed++; }
       finally { inflight.delete(filePath); }
@@ -711,6 +731,13 @@ function startFlushWatcher() {
     // Phase 3: Background cascade — deduplicated
     (async () => {
       await batchCascade(dates as Set<string>, "week", "[bg]");
+      // One commit for the whole flush batch: episodes (phase 1) + day caches
+      // (phase 2) + cascaded caches (phase 3). Author date = world-time of the
+      // latest triggering session in the batch.
+      commitDataRepo({
+        message: `cascade flush ${[...dates].sort().join(",")}: ${processed} episode${processed === 1 ? "" : "s"} → day/week/month/quarter/year`,
+        authorDate: latestTs ?? undefined,
+      });
       log("  [bg] Background cascade complete");
     })().catch(err => log(`Background cascade error: ${err.message}`));
   }, 1000);
@@ -794,6 +821,10 @@ async function main() {
   }
 
   log("DMN starting");
+  const repo = ensureDataRepo();
+  log(repo.enabled
+    ? `Data repo ready: ${repo.root}`
+    : "Data repo versioning DISABLED (git unavailable or init failed) — memory continues unversioned");
   startWatcher();
   startFlushWatcher();
   scheduleSweep();
