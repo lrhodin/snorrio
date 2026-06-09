@@ -321,7 +321,14 @@ async function piComplete(messages: Message[], systemPrompt: string, modelSpec: 
   const piAi = await getPiAi();
   _tlog("resolve+auth", `${Date.now() - t0}ms model=${resolved.model.provider}/${resolved.model.id}`);
   const tApi = Date.now();
-  const result = await piAi.completeSimple(
+  // Use the non-simple API: pi-ai's *Simple wrappers inject `thinkingEnabled: false`
+  // when no `reasoning` option is set, which becomes `thinking: {type: "disabled"}`
+  // on the wire — a 400 on adaptive-thinking models (claude-fable-5+), where
+  // thinking can no longer be explicitly disabled. The non-simple path omits the
+  // thinking param entirely: older models default to no thinking (same behavior
+  // as before), adaptive models default to adaptive. Owned boundary: snorrio
+  // decides its request shape, not the wrapper. (2026-06-09)
+  const result = await piAi.complete(
     resolved.model,
     { systemPrompt, messages },
     { apiKey: resolved.apiKey, ...options },
@@ -336,7 +343,9 @@ async function* piStream(messages: Message[], systemPrompt: string, modelSpec: s
   const piAi = await getPiAi();
   _tlog("resolve+auth", `${Date.now() - t0}ms model=${resolved.model.provider}/${resolved.model.id}`);
   const tStream = Date.now();
-  const eventStream = piAi.streamSimple(
+  // Non-simple API for the same reason as piComplete: avoid the wrapper's
+  // `thinkingEnabled: false` injection (400 on adaptive-thinking models).
+  const eventStream = piAi.stream(
     resolved.model,
     { systemPrompt, messages },
     { apiKey: resolved.apiKey, ...options },
