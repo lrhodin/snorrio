@@ -28,7 +28,7 @@ main() {
   echo ""
   echo "done."
   echo ""
-  echo "  launch pi to get started"
+  echo "  open a new terminal, then launch pi to get started"
   echo ""
 }
 
@@ -221,14 +221,20 @@ install_dev_hooks() {
 ensure_path() {
   if echo "$PATH" | grep -q "$BIN_DIR"; then return; fi
 
+  # zsh: .zprofile, not .zshrc — login shells (Terminal.app tabs, ssh, scripts
+  # run via `zsh -l`) read .zprofile; .zshrc only covers interactive shells,
+  # which left `snorrio`/`recall` unfindable from scripts and SSH commands
+  # (2026-06-09 VM onboarding test).
   local shell_rc
   case "${SHELL:-/bin/zsh}" in
-    */zsh)  shell_rc="$HOME/.zshrc" ;;
+    */zsh)  shell_rc="$HOME/.zprofile" ;;
     */bash) shell_rc="$HOME/.bashrc" ;;
     *)      shell_rc="$HOME/.profile" ;;
   esac
 
-  if [ -f "$shell_rc" ] && grep -q '.local/bin' "$shell_rc" 2>/dev/null; then return; fi
+  for rc in "$shell_rc" "$HOME/.zshrc"; do
+    if [ -f "$rc" ] && grep -q '.local/bin' "$rc" 2>/dev/null; then return; fi
+  done
 
   echo '' >> "$shell_rc"
   echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$shell_rc"

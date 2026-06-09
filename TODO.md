@@ -2,6 +2,12 @@
 
 Engineering backlog for the snorrio memory/recall system. Personal and cross-project items live in `~/colter/TODO.md`.
 
+## Onboarding / ops
+
+- [ ] **`snorrio doctor`** — post-install health check: fire one cheap completion via the configured provider and surface the provider's raw error to the human (auth missing, token expired, quota exhausted, model gone). Today any auth failure produces a successful-looking install where memory silently never forms and the only evidence is in daemon logs nobody reads. Born from the 2026-06-09 fresh-VM onboarding test (finding #1) — but generic: every auth failure mode benefits, and it documents nothing about any particular billing path.
+
+- [ ] **subagent: `send` should clear a stale done-signal** — interrupting a subagent to steer it ends the turn and fires the done-signal, so a later `subagent wait` returns instantly with a stale result (observed 2026-06-09, onboarding test orchestration). `subagent send` could delete the signal file for that agent before delivering, re-arming `wait`. Doesn't fix the spurious wake at interrupt time (turn-end vs task-end is genuinely ambiguous); it fixes the workflow after a steer.
+
 ## Recall
 
 - [ ] **Vector search mode for recall** — embed raw session chunks, store in a vector DB, add a `recall --search "query"` mode that finds relevant sessions across the full history without hierarchical drill-down. Solves the "which session did we work on X?" needle-in-a-haystack problem across months/quarters. Experiment: pick an embedding model, chunk strategy, and small vector store (sqlite-vss or similar), index existing episodes, compare retrieval quality against current temporal drill-down. Doesn't replace temporal caches (still needed for orientation) — complementary retrieval path. TurboQuant-style embedding compression could apply later.

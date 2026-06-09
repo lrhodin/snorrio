@@ -41,6 +41,7 @@ import { atomicWriteFile as atomicWrite } from "./atomic-write.ts";
 import { ensureDataRepo, commitDataRepo } from "./data-repo.ts";
 import { recall } from "./recall-engine.ts";
 import { decideCascade, dateToWeek, monthToQuarter, type CascadeLevel } from "./cascade-decision.ts";
+import { findStaleSessions } from "./stale-sessions.ts";
 import {
   sessionIdFromPath, sessionIdFromEntries,
   sessionTimestamps as metaTimestamps,
@@ -405,13 +406,17 @@ function onSessionChange(filePath: string) {
 }
 
 function startWatcher() {
-  if (existsSync(PI_SESSIONS_DIR)) {
-    log(`Watching: ${PI_SESSIONS_DIR}`);
-    watch(PI_SESSIONS_DIR, { recursive: true }, (_, filename) => {
-      if (!filename?.endsWith(".jsonl")) return;
-      onSessionChange(join(PI_SESSIONS_DIR, filename));
-    });
-  }
+  // Fresh-machine fix (2026-06-09 VM onboarding test): on a brand-new install
+  // the daemon starts before the user has ever launched pi, so the sessions
+  // dir doesn't exist yet. The old existsSync guard silently skipped the
+  // watcher and no episode was ever generated until a daemon restart.
+  // Create the dir instead — pi happily uses a pre-created sessions dir.
+  mkdirSync(PI_SESSIONS_DIR, { recursive: true });
+  log(`Watching: ${PI_SESSIONS_DIR}`);
+  watch(PI_SESSIONS_DIR, { recursive: true }, (_, filename) => {
+    if (!filename?.endsWith(".jsonl")) return;
+    onSessionChange(join(PI_SESSIONS_DIR, filename));
+  });
 }
 
 // ============================================================================
@@ -426,19 +431,8 @@ async function sweep() {
   const CONCURRENCY = parseInt(process.env.REPROCESS_CONCURRENCY || "8");
   const touchedDays = new Set<string>();
 
-  const todo: SessionInfo[] = [];
-  for (const s of sessions) {
-    const { start, end } = metaTimestamps(s.path);
-    const dateStr = toDateStr(end || start || new Date().toISOString());
-    const epPath = join(EPISODES_DIR, dateStr, `${s.id}.md`);
-    if (existsSync(epPath)) {
-      const sessionMtime = statSync(s.path).mtimeMs;
-      const episodeMtime = statSync(epPath).mtimeMs;
-      if (sessionMtime <= episodeMtime) { exists++; continue; }
-      log(`  Stale episode: ${s.id.slice(0, 8)} (session newer by ${Math.round((sessionMtime - episodeMtime) / 1000)}s)`);
-    }
-    todo.push(s);
-  }
+  const { stale: todo, fresh } = findStaleSessions(sessions, EPISODES_DIR, dateOfSession, log);
+  exists = fresh;
   log(`  ${todo.length} need episodes, ${exists} exist`);
 
   const pool = new Set<Promise<void>>();
@@ -548,14 +542,17 @@ function rangeToDays(range: { type: string; ref: string }): string[] {
   }
 }
 
+function dateOfSession(s: SessionInfo): string {
+  const { start, end } = metaTimestamps(s.path);
+  return toDateStr(end || start || new Date().toISOString());
+}
+
 function sessionsForDays(days: string[]) {
   const daySet = new Set(days);
   const sessions = metaAllSessions();
   const matched: SessionInfo[] = [];
   for (const s of sessions) {
-    const { start, end } = metaTimestamps(s.path);
-    const dateStr = toDateStr(end || start || new Date().toISOString());
-    if (daySet.has(dateStr)) matched.push(s);
+    if (daySet.has(dateOfSession(s))) matched.push(s);
   }
   return matched;
 }
@@ -686,20 +683,31 @@ function startFlushWatcher() {
     if (!existsSync(FLUSH_TRIGGER)) return;
     try { unlinkSync(FLUSH_TRIGGER); } catch { return; }
     log("Flush triggered");
-    const pending = [...timers.entries()];
-    for (const [filePath, timer] of pending) {
+    const pendingPaths = new Set<string>();
+    for (const [filePath, timer] of timers.entries()) {
       clearTimeout(timer);
       timers.delete(filePath);
+      pendingPaths.add(filePath);
     }
-    if (pending.length === 0) { log("Flush: 0 sessions to process"); return; }
-    log(`Flush: ${pending.length} pending`);
+    // Reconcile against disk, not just in-memory timers: if the watcher missed
+    // sessions (never installed, daemon restarted, events dropped), the timers
+    // map lies. The filesystem is the source of truth — "all sessions up to
+    // date" must be true by construction. (2026-06-09 VM onboarding finding #2)
+    try {
+      const { stale } = findStaleSessions(metaAllSessions(), EPISODES_DIR, dateOfSession);
+      for (const s of stale) pendingPaths.add(s.path);
+    } catch (err: any) {
+      log(`Flush: disk reconciliation failed (${err.message?.slice(0, 100)}); proceeding with watcher-pending only`);
+    }
+    if (pendingPaths.size === 0) { log("Flush: 0 sessions to process"); return; }
+    log(`Flush: ${pendingPaths.size} pending`);
 
     // Phase 1: Generate episodes (skip cascade — we'll do it ourselves)
     globalThis._skipCascade = true;
     let processed = 0, failed = 0;
     let latestTs: string | null = null; // world-time of the latest triggering session
     const dates = new Set<string>();
-    for (const [filePath] of pending) {
+    for (const filePath of pendingPaths) {
       if (inflight.has(filePath)) continue;
       inflight.add(filePath);
       try {

@@ -77,6 +77,24 @@ recall 50690a64 "What was the exact Chrome launch command?"
 
 Each hop takes ~1-2s. Three hops to exact detail in under 5 seconds.
 
+## Time travel (`--at`)
+
+```bash
+recall --at <ISO-timestamp> <ref> "question"
+recall --at 2026-06-01T00:00:00Z 2026-W22 "What did this week's summary say at the time?"
+```
+
+Reads the caches **as they stood at that wall-clock moment**, via the data
+repo's git history — the faithful past-self view, free of later hindsight.
+
+- Works for **week/month/quarter/year refs only.** Day and session refs read
+  episodes/raw sessions directly (not versioned caches) and are rejected with
+  a clear error — don't retry, drill at the week level instead.
+- A cache that didn't exist at that time is **skipped, never regenerated**.
+  Nothing is written in `--at` mode.
+- Timestamps before the data repo's first commit return a clear
+  "history starts later" error.
+
 ## Timeout
 
 Recall invokes an LLM under the hood. **Always use a minimum 120-second timeout** (or omit timeout entirely). If you set it too short and it aborts, you lose all the work and have to re-run.
