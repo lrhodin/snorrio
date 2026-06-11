@@ -37,6 +37,7 @@ Commands:
   kill <session-name> [session-name...]            Kill named sessions
   logs <session-name>                              Capture last 500 lines from tmux pane
   send <session-name> <message>                    Send steering input to a running agent
+  doctor                                           Check subagent environment (tmux, macOS Full Disk Access)
 
 Options:
   -h, --help    Show this help`);
@@ -656,6 +657,66 @@ function cmdSend(args) {
   console.log(`sent to ${sessionName}`);
 }
 
+// --- doctor ---
+
+// A real open(2) of the user TCC database: succeeds iff the responsible
+// process has Full Disk Access. Must be an open, not a stat — `ls` passes
+// without FDA and gives a false positive.
+const TCC_CANARY = `head -c1 "$HOME/Library/Application Support/com.apple.TCC/TCC.db" >/dev/null 2>&1`;
+
+function cmdDoctor() {
+  let failed = false;
+
+  // 1. tmux present
+  const tmuxPath = execSafe("which tmux");
+  if (!tmuxPath) {
+    console.log("✗ tmux: not found — brew install tmux");
+    process.exit(1);
+  }
+  console.log(`✓ tmux: ${tmuxPath}`);
+
+  if (process.platform !== "darwin") {
+    console.log("✓ TCC checks skipped (not macOS)");
+    return;
+  }
+
+  // 2. This process (the main agent's lineage)
+  const mainOk = execSafe(`sh -c ${esc(TCC_CANARY)} && echo ok`) === "ok";
+  console.log(mainOk
+    ? "✓ this process: Full Disk Access OK"
+    : "✗ this process: no Full Disk Access (grant FDA to your terminal app in System Settings → Privacy & Security)");
+  if (!mainOk) failed = true;
+
+  // 3. The tmux server — what subagents actually inherit.
+  // TCC attributes a subagent's access to the tmux server daemon, not to
+  // the terminal you granted FDA to. Test inside a throwaway session.
+  const marker = join(tmpdir(), `subagent-doctor-${process.pid}`);
+  rmSync(marker, { force: true });
+  execSafe(`tmux kill-session -t subagent-doctor 2>/dev/null`);
+  execSafe(`tmux new-session -d -s subagent-doctor ${esc(`${TCC_CANARY} && echo ok > ${marker} || echo denied > ${marker}`)}`);
+  let tmuxOk = null;
+  for (let i = 0; i < 50 && tmuxOk === null; i++) {
+    execSync("sleep 0.1");
+    if (existsSync(marker)) tmuxOk = readFileSync(marker, "utf-8").trim() === "ok";
+  }
+  execSafe(`tmux kill-session -t subagent-doctor 2>/dev/null`);
+  rmSync(marker, { force: true });
+
+  if (tmuxOk === true) {
+    console.log("✓ tmux server: Full Disk Access OK — subagents can read TCC-protected paths");
+  } else {
+    failed = true;
+    const realTmux = execSafe(`realpath ${esc(tmuxPath)}`) || tmuxPath;
+    console.log(tmuxOk === false
+      ? "✗ tmux server: NO Full Disk Access — subagents cannot read TCC-protected paths (e.g. ~/Library/Messages)"
+      : "✗ tmux server: check did not complete");
+    console.log(`  Fix: System Settings → Privacy & Security → Full Disk Access → + → Cmd+Shift+G → ${tmuxPath}`);
+    console.log(`  Note: homebrew tmux is adhoc-signed (${realTmux}) — the grant dies on every \`brew upgrade tmux\`. Re-run doctor after upgrades.`);
+  }
+
+  process.exit(failed ? 1 : 0);
+}
+
 // --- main ---
 
 const args = process.argv.slice(2);
@@ -689,6 +750,9 @@ switch (cmd) {
     break;
   case "send":
     cmdSend(cmdArgs);
+    break;
+  case "doctor":
+    cmdDoctor();
     break;
   default:
     console.error(`Unknown command: ${cmd}`);

@@ -5,7 +5,7 @@ description: Spawn pi subagents in tmux for tasks that benefit from isolation �
 
 # Subagents
 
-Spawn pi agents in tmux using the `subagent` CLI. Each subagent is a full pi session with the same skills and tools you have, including this one.
+Spawn pi agents in tmux using the `subagent` CLI. Each subagent is a full pi session with the same skills, tools, and config you have, including this one. **It does not inherit your macOS permissions** — see the TCC note in Setup.
 
 Use subagents for anything that would consume a lot of your context — research, codebase exploration, builds, parallel tasks. Even a single subagent is useful.
 
@@ -32,13 +32,26 @@ ln -sf PACKAGE_DIR/skills/subagent/subagent.mjs ~/.local/bin/subagent
 
 Make sure `~/.local/bin` is on PATH (the snorrio setup checklist handles this — if not done yet, load the **snorrio** skill).
 
-#### 3. Verify
+#### 3. Full Disk Access for the tmux server (macOS)
+
+On macOS, TCC attributes a subagent's file access to the **tmux server daemon**, not to the terminal app you granted Full Disk Access to. So even when the main agent can read protected paths (`~/Library/Messages`, `~/Library/Mail`, …), subagents are denied — they sit in the tmux server's responsibility lineage, which has no grant of its own.
+
+Grant FDA to the tmux binary: System Settings → Privacy & Security → Full Disk Access → **+** → `Cmd+Shift+G` → `/opt/homebrew/bin/tmux` → enable. The running server picks the grant up immediately; no restart needed.
+
+Two caveats:
+
+- **Homebrew tmux is adhoc-signed**, so the grant is pinned to the exact binary hash — every `brew upgrade tmux` silently invalidates it. Re-run `subagent doctor` after upgrades.
+- The grant applies to **everything** run inside any tmux session on the machine, not just subagents.
+
+Related: sessions started over **SSH** have the same problem with a different responsible process (`/usr/libexec/sshd-keygen-wrapper`). Fix via System Settings → General → Sharing → Remote Login → ⓘ → "Allow full disk access for remote users", then reconnect. That grant is on an Apple-signed binary and survives updates.
+
+#### 4. Verify
 
 ```bash
-which subagent && subagent list
+which subagent && subagent doctor
 ```
 
-If `subagent list` runs without error, you're set. The signal extension (`subagent-signal.ts`) is in the package's extensions directory and is loaded automatically by pi.
+`subagent doctor` checks tmux and — on macOS — runs a real-read FDA canary both in your lineage and inside the tmux server's. (A real open, not `ls`: TCC intercepts `open(2)`, so stat-based checks give false positives.) The signal extension (`subagent-signal.ts`) is in the package's extensions directory and is loaded automatically by pi.
 
 ## CLI
 
@@ -51,6 +64,7 @@ subagent wait <prefix>                             # block until all matching pr
 subagent wait <name> [name...]                     # block until named agents complete
 subagent logs <name>                               # last 500 lines from pane
 subagent send <name> <message>                     # steer a running agent
+subagent doctor                                    # check environment (tmux, macOS FDA)
 subagent kill <workspace-dir>                      # tear down all workspace agents
 subagent kill <name> [name...]                     # tear down named agents
 subagent list                                      # show all active sessions
