@@ -82,6 +82,7 @@ if (cmd === "flush") {
   try { logOffset = statSync(logFile).size; } catch {}
 
   const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+  const CLR = "\x1b[K"; // erase from cursor to end of line, so a shorter frame can't leave tail chars
   let spinIdx = 0;
   const started = Date.now();
 
@@ -101,7 +102,8 @@ if (cmd === "flush") {
     let stat;
     try { stat = statSync(logFile); } catch { return; }
     if (stat.size <= logOffset) {
-      process.stdout.write(`\r${s} ${phase === "waiting" ? "Waiting for daemon..." : `Episodes: ${episodesDone}/${total}`}`);
+      const shown = total ? Math.min(episodesDone, total) : episodesDone;
+      process.stdout.write(`\r${s} ${phase === "waiting" ? "Waiting for daemon..." : `Episodes: ${shown}/${total}`}${CLR}`);
       return;
     }
 
@@ -114,7 +116,7 @@ if (cmd === "flush") {
     const text = buf.toString("utf8");
 
     if (text.includes("Flush: 0 sessions to process")) {
-      console.log("\r✓ All sessions up to date");
+      console.log(`\r✓ All sessions up to date${CLR}`);
       clearInterval(poll);
       process.exit(0);
     }
@@ -125,6 +127,11 @@ if (cmd === "flush") {
       phase = "episodes";
     }
 
+    // NOTE: `Done:` is logged by every episode-generation path (live debounce
+    // watcher, flush, sweep). A concurrent live-mode generation during the
+    // flush window can emit extra `Done:` lines that aren't part of this batch,
+    // so this is an upper bound — clamped to `total` at display time. The
+    // authoritative count is the `Flush: N processed` summary line below.
     const doneMatches = text.match(/  Done: /g);
     if (doneMatches) episodesDone += doneMatches.length;
 
@@ -135,12 +142,13 @@ if (cmd === "flush") {
       let msg = `\r✓ ${processed} episode${processed !== 1 ? "s" : ""}`;
       if (failed > 0) msg += ` (${failed} failed)`;
       msg += " — caches updating in background";
-      console.log(msg);
+      console.log(msg + CLR);
       clearInterval(poll);
       process.exit(failed > 0 ? 1 : 0);
     }
 
-    process.stdout.write(`\r${s} Episodes: ${episodesDone}/${total}`);
+    const shown = total ? Math.min(episodesDone, total) : episodesDone;
+    process.stdout.write(`\r${s} Episodes: ${shown}/${total}${CLR}`);
   }, 200);
 
 } else if (cmd === "sweep") {
