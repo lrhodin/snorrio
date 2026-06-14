@@ -148,20 +148,57 @@ export const CONFIG_DIR = join(SNORRIO_HOME, "config");
 export const CONFIG_PATH = join(CONFIG_DIR, "config.json");
 const PI_SETTINGS_PATH = join(HOME, ".pi/agent/settings.json");
 
+// Aliases map a model *type* to a family prefix per provider — NOT a pinned
+// version. resolveAlias() picks the newest available version of that family
+// from pi-ai's registry, so "opus"/"fable" always track the latest release and
+// version numbers never have to be hand-edited here. (See latestModelForFamily.)
 const MODEL_ALIASES: Record<string, Record<string, string>> = {
   opus: {
-    "anthropic": "claude-opus-4-6",
-    "github-copilot": "claude-opus-4.6",
+    "anthropic": "claude-opus",
+    "github-copilot": "claude-opus",
   },
   sonnet: {
-    "anthropic": "claude-sonnet-4-6",
-    "github-copilot": "claude-sonnet-4.6",
+    "anthropic": "claude-sonnet",
+    "github-copilot": "claude-sonnet",
   },
   haiku: {
-    "anthropic": "claude-haiku-4-5",
-    "github-copilot": "claude-haiku-4.5",
+    "anthropic": "claude-haiku",
+    "github-copilot": "claude-haiku",
+  },
+  fable: {
+    "anthropic": "claude-fable",
+    "github-copilot": "claude-fable",
   },
 };
+
+// Compare two numeric version tuples (e.g. [4,8] vs [4,7]); missing trailing
+// components count as 0 so [4,8] > [4].
+function compareVersion(a: number[], b: number[]): number {
+  const n = Math.max(a.length, b.length);
+  for (let i = 0; i < n; i++) {
+    const d = (a[i] ?? 0) - (b[i] ?? 0);
+    if (d !== 0) return d;
+  }
+  return 0;
+}
+
+// Resolve a family prefix (e.g. "claude-opus") to the newest concrete model id
+// for a provider. Matches ids of the form <family>[-.]<numeric.version>, where
+// the separator is provider-specific (anthropic uses "-", copilot uses ".").
+// Dated snapshots (any version component >= 1000, e.g. claude-opus-4-20250514)
+// are skipped so a date never out-ranks a real release.
+function latestModelForFamily(piAi: any, provider: string, family: string): Model | undefined {
+  const re = new RegExp(`^${family}[-.]([0-9]+(?:[-.][0-9]+)*)$`);
+  let best: { model: Model; ver: number[] } | undefined;
+  for (const model of (piAi.getModels(provider) as Model[])) {
+    const m = model.id.match(re);
+    if (!m) continue;
+    const ver = m[1].split(/[-.]/).map(Number);
+    if (ver.some(n => !Number.isFinite(n) || n >= 1000)) continue;
+    if (!best || compareVersion(ver, best.ver) > 0) best = { model, ver };
+  }
+  return best?.model;
+}
 
 const DEFAULT_PROVIDER_PREFERENCE = ["anthropic", "github-copilot", "openai-codex"];
 
@@ -287,7 +324,7 @@ async function resolveAlias(alias: string, preferredProvider: string | null, piA
 
   if (preferredProvider && providerMap[preferredProvider]) {
     if (await hasAuth(preferredProvider)) {
-      const model = piAi.getModel(preferredProvider, providerMap[preferredProvider]);
+      const model = latestModelForFamily(piAi, preferredProvider, providerMap[preferredProvider]);
       if (model) return model;
     }
   }
@@ -295,13 +332,13 @@ async function resolveAlias(alias: string, preferredProvider: string | null, piA
   for (const provider of getProviderPreference()) {
     if (!providerMap[provider]) continue;
     if (await hasAuth(provider)) {
-      const model = piAi.getModel(provider, providerMap[provider]);
+      const model = latestModelForFamily(piAi, provider, providerMap[provider]);
       if (model) return model;
     }
   }
 
   const providers = Object.keys(providerMap).join(", ");
-  throw new Error(`No auth available for '${alias}'. Need credentials for one of: ${providers}. Run: pi then /login`);
+  throw new Error(`No '${alias}' model available. Need a registry match for family '${alias}' on one of: ${providers} (and auth). Run: pi then /login`);
 }
 
 // --- LLM Calls ---
