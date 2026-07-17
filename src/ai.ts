@@ -95,36 +95,18 @@ export function piRoot(): string | null {
   return _piRoot;
 }
 
-// Dynamic pi-ai imports — only attempted when pi is available
-let _piAi: any, _piOauth: any, _piAgent: any;
-
-// pi-ai was published under @mariozechner, then renamed to @earendil-works.
-// Try the new scope first, fall back to the old one.
-async function importPiAi(root: string, sub: string) {
-  for (const scope of ["@earendil-works/pi-ai", "@mariozechner/pi-ai"]) {
-    const p = join(root, "node_modules", scope, sub);
-    if (existsSync(p)) return import(p);
-  }
-  throw new Error(`pi-ai not found (looked for ${sub} under both scopes)`);
-}
-
-async function getPiAi() {
-  if (!_piAi) {
-    const root = piRoot();
-    if (!root) throw new Error("pi not installed");
-    _piAi = await importPiAi(root, "dist/index.js");
-  }
-  return _piAi;
-}
-
-async function getPiOauth() {
-  if (!_piOauth) {
-    const root = piRoot();
-    if (!root) throw new Error("pi not installed");
-    _piOauth = await importPiAi(root, "dist/oauth.js");
-  }
-  return _piOauth;
-}
+// --- Pi runtime (ModelRuntime via createAgentSessionServices) ---
+//
+// pi-ai's old top-level surface (getModel/getModels/complete/stream) and
+// coding-agent's AuthStorage were removed. Model resolution, provider auth,
+// and completion now live behind a single `Models` implementation:
+// ModelRuntime. We obtain one via createAgentSessionServices() so that
+// extension-registered providers (e.g. a bifrost gateway) and their auth are
+// loaded exactly as they are for an interactive pi session — snorrio sees the
+// same models the user does.
+let _piAgent: any;
+let _runtime: any;
+let _runtimePromise: Promise<any> | null = null;
 
 async function getPiAgent() {
   if (!_piAgent) {
@@ -133,6 +115,24 @@ async function getPiAgent() {
     _piAgent = await import(join(root, "dist/index.js"));
   }
   return _piAgent;
+}
+
+// Cached, single-flight ModelRuntime. cwd only affects project-scoped
+// resource loading (context files, project extensions); the daemon has no
+// meaningful project cwd, so we use SNORRIO_HOME. Provider registrations from
+// user-global extensions load regardless of cwd.
+async function getRuntime(): Promise<any> {
+  if (_runtime) return _runtime;
+  if (!_runtimePromise) {
+    _runtimePromise = (async () => {
+      const agent = await getPiAgent();
+      const cwd = process.env.SNORRIO_RUNTIME_CWD || SNORRIO_HOME || process.cwd();
+      const services = await agent.createAgentSessionServices({ cwd });
+      _runtime = services.modelRuntime;
+      return _runtime;
+    })();
+  }
+  return _runtimePromise;
 }
 
 // --- Snorrio paths ---
@@ -182,24 +182,6 @@ function compareVersion(a: number[], b: number[]): number {
   return 0;
 }
 
-// Resolve a family prefix (e.g. "claude-opus") to the newest concrete model id
-// for a provider. Matches ids of the form <family>[-.]<numeric.version>, where
-// the separator is provider-specific (anthropic uses "-", copilot uses ".").
-// Dated snapshots (any version component >= 1000, e.g. claude-opus-4-20250514)
-// are skipped so a date never out-ranks a real release.
-function latestModelForFamily(piAi: any, provider: string, family: string): Model | undefined {
-  const re = new RegExp(`^${family}[-.]([0-9]+(?:[-.][0-9]+)*)$`);
-  let best: { model: Model; ver: number[] } | undefined;
-  for (const model of (piAi.getModels(provider) as Model[])) {
-    const m = model.id.match(re);
-    if (!m) continue;
-    const ver = m[1].split(/[-.]/).map(Number);
-    if (ver.some(n => !Number.isFinite(n) || n >= 1000)) continue;
-    if (!best || compareVersion(ver, best.ver) > 0) best = { model, ver };
-  }
-  return best?.model;
-}
-
 const DEFAULT_PROVIDER_PREFERENCE = ["anthropic", "github-copilot", "openai-codex"];
 
 function getProviderPreference(): string[] {
@@ -223,46 +205,39 @@ function loadPiSettings(): PiSettings {
   }
 }
 
-// --- Auth (pi backend only) ---
+// --- Auth / availability (via ModelRuntime) ---
 
-let _authStorage: any;
-
-async function getAuthStorage() {
-  if (!_authStorage) {
-    const { AuthStorage } = await getPiAgent();
-    _authStorage = AuthStorage.create();
-  }
-  return _authStorage;
-}
-
+// Whether a provider has usable auth. The runtime resolves stored credentials,
+// ambient env keys, extension-supplied apiKeys, and OAuth uniformly.
 async function hasAuth(provider: string): Promise<boolean> {
-  const auth = await getAuthStorage();
-  return auth.hasAuth(provider);
-}
-
-async function getApiKey(provider: string): Promise<string> {
-  const auth = await getAuthStorage();
-  return auth.getApiKey(provider);
+  const rt = await getRuntime();
+  try {
+    return rt.hasConfiguredAuth(provider);
+  } catch {
+    return false;
+  }
 }
 
 // --- Model Resolution (pi backend) ---
 
-async function applyProviderModifications(model: Model): Promise<Model> {
-  const auth = await getAuthStorage();
-  const cred = auth.get(model.provider);
-  if (cred?.type !== "oauth") return model;
-
-  const oauth = await getPiOauth();
-  const oauthProvider = oauth.getOAuthProvider(model.provider);
-  if (!oauthProvider?.modifyModels) return model;
-
-  const [modified] = oauthProvider.modifyModels([model], cred);
-  return modified;
+// Resolve a family prefix to the newest concrete model for a provider, using
+// the runtime's model list (built-in + extension-registered providers).
+function latestModelForFamilyRt(rt: any, provider: string, family: string): Model | undefined {
+  const re = new RegExp(`^${family}[-.]([0-9]+(?:[-.][0-9]+)*)$`);
+  let best: { model: Model; ver: number[] } | undefined;
+  for (const model of (rt.getModels(provider) as Model[])) {
+    const m = model.id.match(re);
+    if (!m) continue;
+    const ver = m[1].split(/[-.]/).map(Number);
+    if (ver.some(n => !Number.isFinite(n) || n >= 1000)) continue;
+    if (!best || compareVersion(ver, best.ver) > 0) best = { model, ver };
+  }
+  return best?.model;
 }
 
 export async function resolveModel(spec: string | null = null, toolName: string | null = null): Promise<Resolved> {
   const config = loadConfig();
-  const piAi = await getPiAi();
+  const rt = await getRuntime();
 
   const effectiveSpec = spec
     || config.tools?.[toolName!]?.model
@@ -278,20 +253,24 @@ export async function resolveModel(spec: string | null = null, toolName: string 
   let model: Model | undefined;
 
   if (effectiveSpec?.includes("/")) {
-    const [provider, modelId] = effectiveSpec.split("/", 2);
-    model = piAi.getModel(provider, modelId);
+    // provider/modelId. modelId may itself contain "/" (e.g. bifrost's
+    // "bedrock/us.anthropic.claude-opus-4-8"), so split only on the first "/".
+    const slash = effectiveSpec.indexOf("/");
+    const provider = effectiveSpec.slice(0, slash);
+    const modelId = effectiveSpec.slice(slash + 1);
+    model = rt.getModel(provider, modelId);
     if (!model) throw new Error(`Model not found: ${effectiveSpec}`);
 
   } else if (effectiveSpec && MODEL_ALIASES[effectiveSpec]) {
-    model = await resolveAlias(effectiveSpec, effectiveProvider, piAi);
+    model = await resolveAlias(effectiveSpec, effectiveProvider, rt);
 
   } else if (effectiveSpec) {
     if (effectiveProvider) {
-      model = piAi.getModel(effectiveProvider, effectiveSpec);
+      model = rt.getModel(effectiveProvider, effectiveSpec);
     }
     if (!model) {
       for (const p of getProviderPreference()) {
-        model = piAi.getModel(p, effectiveSpec);
+        model = rt.getModel(p, effectiveSpec);
         if (model) break;
       }
     }
@@ -304,27 +283,27 @@ export async function resolveModel(spec: string | null = null, toolName: string 
     if (!provider || !modelId) {
       throw new Error("No model specified and no pi default configured. Run pi and select a model, or set model in ~/snorrio/config/config.json");
     }
-    model = piAi.getModel(provider, modelId);
+    model = rt.getModel(provider, modelId);
     if (!model) throw new Error(`Pi's default model not found: ${provider}/${modelId}`);
   }
 
-  model = await applyProviderModifications(model);
-
-  const apiKey = await getApiKey(model.provider);
-  if (!apiKey) {
+  if (!rt.hasConfiguredAuth(model.provider)) {
     throw new Error(`No auth configured for provider '${model.provider}'. Run: pi then /login`);
   }
 
-  return { model, apiKey };
+  // apiKey no longer flows through snorrio: ModelRuntime.complete/stream
+  // resolve and inject auth internally (stored creds, ambient env, OAuth
+  // refresh, extension apiKeys). Kept on Resolved for backward compatibility.
+  return { model, apiKey: "" };
 }
 
-async function resolveAlias(alias: string, preferredProvider: string | null, piAi: any): Promise<Model> {
+async function resolveAlias(alias: string, preferredProvider: string | null, rt: any): Promise<Model> {
   const providerMap = MODEL_ALIASES[alias];
   if (!providerMap) throw new Error(`Unknown alias: ${alias}`);
 
   if (preferredProvider && providerMap[preferredProvider]) {
     if (await hasAuth(preferredProvider)) {
-      const model = latestModelForFamily(piAi, preferredProvider, providerMap[preferredProvider]);
+      const model = latestModelForFamilyRt(rt, preferredProvider, providerMap[preferredProvider]);
       if (model) return model;
     }
   }
@@ -332,7 +311,7 @@ async function resolveAlias(alias: string, preferredProvider: string | null, piA
   for (const provider of getProviderPreference()) {
     if (!providerMap[provider]) continue;
     if (await hasAuth(provider)) {
-      const model = latestModelForFamily(piAi, provider, providerMap[provider]);
+      const model = latestModelForFamilyRt(rt, provider, providerMap[provider]);
       if (model) return model;
     }
   }
@@ -355,7 +334,7 @@ function _tlog(phase: string, info: string) {
 async function piComplete(messages: Message[], systemPrompt: string, modelSpec: string | null, toolName: string | null, options: Record<string, any> = {}): Promise<CompletionResult> {
   const t0 = Date.now();
   const resolved = await resolveModel(modelSpec, toolName);
-  const piAi = await getPiAi();
+  const rt = await getRuntime();
   _tlog("resolve+auth", `${Date.now() - t0}ms model=${resolved.model.provider}/${resolved.model.id}`);
   const tApi = Date.now();
   // Use the non-simple API: pi-ai's *Simple wrappers inject `thinkingEnabled: false`
@@ -365,10 +344,10 @@ async function piComplete(messages: Message[], systemPrompt: string, modelSpec: 
   // thinking param entirely: older models default to no thinking (same behavior
   // as before), adaptive models default to adaptive. Owned boundary: snorrio
   // decides its request shape, not the wrapper. (2026-06-09)
-  const result = await piAi.complete(
+  const result = await rt.complete(
     resolved.model,
     { systemPrompt, messages },
-    { apiKey: resolved.apiKey, ...options },
+    options,
   );
   _tlog("complete-done", `apiMs=${Date.now() - tApi} totalMs=${Date.now() - t0} stop=${(result as any)?.stopReason}`);
   return result;
@@ -377,15 +356,15 @@ async function piComplete(messages: Message[], systemPrompt: string, modelSpec: 
 async function* piStream(messages: Message[], systemPrompt: string, modelSpec: string | null, toolName: string | null, options: Record<string, any> = {}): AsyncGenerator<any> {
   const t0 = Date.now();
   const resolved = await resolveModel(modelSpec, toolName);
-  const piAi = await getPiAi();
+  const rt = await getRuntime();
   _tlog("resolve+auth", `${Date.now() - t0}ms model=${resolved.model.provider}/${resolved.model.id}`);
   const tStream = Date.now();
   // Non-simple API for the same reason as piComplete: avoid the wrapper's
   // `thinkingEnabled: false` injection (400 on adaptive-thinking models).
-  const eventStream = piAi.stream(
+  const eventStream = rt.stream(
     resolved.model,
     { systemPrompt, messages },
-    { apiKey: resolved.apiKey, ...options },
+    options,
   );
   let n = 0, first = 0, last = tStream, maxgap = 0;
   for await (const event of eventStream) {
