@@ -27,8 +27,14 @@ snorrio status
 
 Or check the daemon directly:
 
+**macOS (launchd):**
 ```bash
 launchctl list io.snorrio.dmn
+```
+
+**Linux (systemd user service):**
+```bash
+systemctl --user status io.snorrio.dmn.service
 ```
 
 PID present = running. Check today's log:
@@ -49,12 +55,18 @@ The daemon processes all pending sessions, regenerates day caches, then updates 
 
 ## Restarting
 
+**macOS (launchd):**
 ```bash
 launchctl bootout gui/$(id -u)/io.snorrio.dmn
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.snorrio.dmn.plist
 ```
 
-Or use the CLI:
+**Linux (systemd user service):**
+```bash
+systemctl --user restart io.snorrio.dmn.service
+```
+
+Or use the CLI (cross-platform):
 
 ```bash
 snorrio update    # pulls latest code and restarts daemon

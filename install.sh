@@ -9,13 +9,14 @@ CONFIG_DIR="$DATA_HOME/config"
 BIN_DIR="$HOME/.local/bin"
 PACKAGE_DIR="$HOME/.pi/agent/git/github.com/lrhodin/snorrio"
 
+OS="$(uname -s)"
+
 main() {
   echo "snorrio — installing..."
   echo ""
 
   detect_legacy_layout
-  install_homebrew
-  install_node
+  install_prereqs
   install_pi
   install_snorrio
   create_dirs
@@ -69,6 +70,15 @@ detect_legacy_layout() {
 
 # ── Prerequisites ──
 
+install_prereqs() {
+  if [ "$OS" = "Darwin" ]; then
+    install_homebrew
+    install_node_brew
+  else
+    install_node_linux
+  fi
+}
+
 install_homebrew() {
   if command -v brew &>/dev/null; then return; fi
   echo "  installing homebrew..."
@@ -76,7 +86,7 @@ install_homebrew() {
   eval "$(/opt/homebrew/bin/brew shellenv)"
 }
 
-install_node() {
+install_node_brew() {
   if [ -x /opt/homebrew/bin/brew ]; then
     eval "$(/opt/homebrew/bin/brew shellenv)"
   fi
@@ -89,6 +99,23 @@ install_node() {
     echo "  installing node..."
   fi
   brew install node
+}
+
+install_node_linux() {
+  if command -v node &>/dev/null; then
+    NODE_MAJOR=$(node -e 'console.log(process.versions.node.split(".")[0])')
+    if [ "$NODE_MAJOR" -ge 22 ]; then return; fi
+    echo "  node $NODE_MAJOR found, need >= 22."
+  fi
+
+  if ! command -v node &>/dev/null || [ "${NODE_MAJOR:-0}" -lt 22 ]; then
+    echo ""
+    echo "  node >= 22 required. Install it via your package manager or nvm, e.g.:"
+    echo "    nvm install 22"
+    echo "  then rerun this installer."
+    echo ""
+    exit 1
+  fi
 }
 
 install_pi() {
@@ -151,6 +178,14 @@ WRAPPER
 }
 
 install_daemon() {
+  if [ "$OS" = "Darwin" ]; then
+    install_daemon_launchd
+  else
+    install_daemon_systemd
+  fi
+}
+
+install_daemon_launchd() {
   local NODE_BIN
   NODE_BIN=$(which node)
   local NODE_DIR
@@ -196,6 +231,53 @@ EOF
   launchctl bootstrap "gui/$(id -u)" "$PLIST"
 
   if launchctl list io.snorrio.dmn &>/dev/null; then
+    echo "  daemon started"
+  else
+    echo "  warning: daemon failed to start — check $DATA_HOME/logs/"
+  fi
+}
+
+install_daemon_systemd() {
+  if ! command -v systemctl &>/dev/null; then
+    echo "  warning: systemctl not found — cannot install daemon service."
+    echo "  run the daemon manually: node $PACKAGE_DIR/src/episode-daemon.ts"
+    return
+  fi
+
+  local NODE_BIN
+  NODE_BIN=$(which node)
+  local NODE_DIR
+  NODE_DIR=$(dirname "$NODE_BIN")
+  local UNIT_DIR="$HOME/.config/systemd/user"
+  local UNIT="$UNIT_DIR/io.snorrio.dmn.service"
+
+  mkdir -p "$UNIT_DIR"
+
+  cat > "$UNIT" << EOF
+[Unit]
+Description=Snorrio episode daemon
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=${NODE_BIN} ${PACKAGE_DIR}/src/episode-daemon.ts
+Restart=always
+RestartSec=5
+Environment=HOME=${HOME}
+Environment=PATH=${BIN_DIR}:${NODE_DIR}:/usr/local/bin:/usr/bin:/bin
+Environment=SNORRIO_HOME=${DATA_HOME}
+StandardOutput=append:${DATA_HOME}/logs/daemon-stdout.log
+StandardError=append:${DATA_HOME}/logs/daemon-stderr.log
+
+[Install]
+WantedBy=default.target
+EOF
+
+  systemctl --user daemon-reload
+  systemctl --user enable --now io.snorrio.dmn.service
+  loginctl enable-linger "$(whoami)" 2>/dev/null || true
+
+  if [ "$(systemctl --user is-active io.snorrio.dmn.service 2>/dev/null)" = "active" ]; then
     echo "  daemon started"
   else
     echo "  warning: daemon failed to start — check $DATA_HOME/logs/"

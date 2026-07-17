@@ -12,6 +12,7 @@ import { existsSync, statSync, writeFileSync, openSync, readSync, closeSync } fr
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { execSync, execFileSync } from "child_process";
+import { platform } from "os";
 
 const HOME = process.env.HOME;
 const PKG_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -19,42 +20,68 @@ const SNORRIO_HOME = process.env.SNORRIO_HOME || join(HOME, "snorrio");
 const CONFIG_PATH = join(SNORRIO_HOME, "config", "config.json");
 const LOG_DIR = join(SNORRIO_HOME, "logs");
 const FLUSH_TRIGGER = join(SNORRIO_HOME, "flush");
+
+const IS_MACOS = platform() === "darwin";
 const PLIST_PATH = join(HOME, "Library", "LaunchAgents", "io.snorrio.dmn.plist");
+const SERVICE_NAME = "io.snorrio.dmn.service";
 
 const cmd = process.argv[2];
 
-function daemonLoaded() {
-  try {
-    execFileSync("launchctl", ["list", "io.snorrio.dmn"], { stdio: "pipe" });
-    return true;
-  } catch {
-    return false;
+// Returns the running daemon's PID as a string, or null if not running.
+function daemonPid() {
+  if (IS_MACOS) {
+    try {
+      const out = execSync("launchctl list io.snorrio.dmn 2>/dev/null", { encoding: "utf8" });
+      const pidMatch = out.match(/"PID"\s*=\s*(\d+)/);
+      return pidMatch ? pidMatch[1] : null;
+    } catch {
+      return null;
+    }
+  } else {
+    // Linux: systemd user service
+    try {
+      const active = execSync(`systemctl --user is-active ${SERVICE_NAME} 2>/dev/null`, { encoding: "utf8" }).trim();
+      if (active !== "active") return null;
+      const pid = execSync(`systemctl --user show -p MainPID --value ${SERVICE_NAME} 2>/dev/null`, { encoding: "utf8" }).trim();
+      return pid && pid !== "0" ? pid : null;
+    } catch {
+      return null;
+    }
   }
 }
 
+function daemonLoaded() {
+  return daemonPid() !== null;
+}
+
 async function restartDaemon() {
-  const uid = execSync("id -u", { encoding: "utf8" }).trim();
+  if (IS_MACOS) {
+    const uid = execSync("id -u", { encoding: "utf8" }).trim();
 
-  try { execFileSync("launchctl", ["bootout", `gui/${uid}`, PLIST_PATH], { stdio: "pipe" }); } catch {}
+    try { execFileSync("launchctl", ["bootout", `gui/${uid}`, PLIST_PATH], { stdio: "pipe" }); } catch {}
 
-  const unloadDeadline = Date.now() + 5000;
-  while (daemonLoaded() && Date.now() < unloadDeadline) {
-    await new Promise(resolve => setTimeout(resolve, 100));
-  }
-
-  let lastErr;
-  for (let attempt = 0; attempt < 5; attempt++) {
-    try {
-      execFileSync("launchctl", ["bootstrap", `gui/${uid}`, PLIST_PATH], { stdio: "inherit" });
-      try { execFileSync("launchctl", ["kickstart", "-k", `gui/${uid}/io.snorrio.dmn`], { stdio: "pipe" }); } catch {}
-      return;
-    } catch (err) {
-      lastErr = err;
-      await new Promise(resolve => setTimeout(resolve, 250 * (attempt + 1)));
+    const unloadDeadline = Date.now() + 5000;
+    while (daemonLoaded() && Date.now() < unloadDeadline) {
+      await new Promise(resolve => setTimeout(resolve, 100));
     }
-  }
 
-  throw lastErr;
+    let lastErr;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      try {
+        execFileSync("launchctl", ["bootstrap", `gui/${uid}`, PLIST_PATH], { stdio: "inherit" });
+        try { execFileSync("launchctl", ["kickstart", "-k", `gui/${uid}/io.snorrio.dmn`], { stdio: "pipe" }); } catch {}
+        return;
+      } catch (err) {
+        lastErr = err;
+        await new Promise(resolve => setTimeout(resolve, 250 * (attempt + 1)));
+      }
+    }
+
+    throw lastErr;
+  } else {
+    // Linux: systemd user service
+    execFileSync("systemctl", ["--user", "restart", SERVICE_NAME], { stdio: "inherit" });
+  }
 }
 
 if (!cmd || cmd === "help" || cmd === "--help") {
@@ -184,13 +211,8 @@ if (cmd === "flush") {
 
 } else if (cmd === "status") {
   // Daemon
-  let daemonPid = null;
-  try {
-    const out = execSync("launchctl list io.snorrio.dmn 2>/dev/null", { encoding: "utf8" });
-    const pidMatch = out.match(/"PID"\s*=\s*(\d+)/);
-    daemonPid = pidMatch ? pidMatch[1] : null;
-  } catch {}
-  console.log(`Daemon:    ${daemonPid ? `running (PID ${daemonPid})` : "not running"}`);
+  const pid = daemonPid();
+  console.log(`Daemon:    ${pid ? `running (PID ${pid})` : "not running"}`);
 
   // Data home
   console.log(`Data home: ${SNORRIO_HOME}`);

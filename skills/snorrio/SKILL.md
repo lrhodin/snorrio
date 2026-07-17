@@ -219,6 +219,44 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.snorrio.dmn.plist
 
 Verify: `launchctl list io.snorrio.dmn` — PID present means success.
 
+#### 4b. Daemon (Linux systemd user service)
+
+On Linux, use a systemd user service instead of launchd.
+
+Find node: `NODE=$(which node)`, `NODE_DIR=$(dirname $NODE)`, `PACKAGE_DIR=~/.pi/agent/git/github.com/lrhodin/snorrio`
+
+Write `~/.config/systemd/user/io.snorrio.dmn.service`:
+
+```ini
+[Unit]
+Description=Snorrio episode daemon
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=NODE PACKAGE_DIR/src/episode-daemon.ts
+Restart=always
+RestartSec=5
+Environment=HOME=HOME_DIR
+Environment=PATH=HOME_DIR/.local/bin:NODE_DIR:/usr/local/bin:/usr/bin:/bin
+Environment=SNORRIO_HOME=HOME_DIR/snorrio
+StandardOutput=append:HOME_DIR/snorrio/logs/daemon-stdout.log
+StandardError=append:HOME_DIR/snorrio/logs/daemon-stderr.log
+
+[Install]
+WantedBy=default.target
+```
+
+Replace NODE, NODE_DIR, PACKAGE_DIR, HOME_DIR with actual values.
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now io.snorrio.dmn.service
+loginctl enable-linger $(whoami)   # survive logout/reboot
+```
+
+Verify: `systemctl --user status io.snorrio.dmn.service` — active (running) means success.
+
 #### 5. Extensions and skills
 
 When installed via `pi install`, extensions and skills are auto-discovered from the `extensions/` and `skills/` directories. No manual linking needed.
@@ -243,10 +281,13 @@ This is the last thing they'll need to type manually. After this, the agent can 
 #### 7. Verify
 
 ```bash
-launchctl list io.snorrio.dmn          # daemon running
+snorrio status                          # daemon + system status (cross-platform)
 which recall                            # CLI accessible
 which snorrio                           # admin CLI accessible
-snorrio status                          # full status check
+
+# Or check the daemon directly:
+launchctl list io.snorrio.dmn                    # macOS
+systemctl --user status io.snorrio.dmn.service   # Linux
 ```
 
 ## First session

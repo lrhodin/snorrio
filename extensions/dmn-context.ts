@@ -6,6 +6,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { execSync } from "node:child_process";
+import { platform } from "node:os";
 
 const HOME = process.env.HOME!;
 const PKG_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -52,8 +53,13 @@ function checkSetup(): string | null {
   // 4. Daemon
   let daemonRunning = false;
   try {
-    const out = execSync("launchctl list io.snorrio.dmn 2>/dev/null", { encoding: "utf8", stdio: "pipe" });
-    daemonRunning = out.includes("PID") || /^\d+/m.test(out);
+    if (platform() === "darwin") {
+      const out = execSync("launchctl list io.snorrio.dmn 2>/dev/null", { encoding: "utf8", stdio: "pipe" });
+      daemonRunning = out.includes("PID") || /^\d+/m.test(out);
+    } else {
+      const out = execSync("systemctl --user is-active io.snorrio.dmn.service 2>/dev/null", { encoding: "utf8", stdio: "pipe" });
+      daemonRunning = out.trim() === "active";
+    }
   } catch {}
   if (daemonRunning) ok.push("daemon running");
   else issues.push("daemon not running — load the snorrio skill for setup instructions");
