@@ -70,23 +70,33 @@ function hasPi(): boolean {
 
 let _piRoot: string | null | undefined = undefined;
 
+// A pi root is only valid if it actually contains the module we import.
+function isValidPiRoot(root: string): boolean {
+  return existsSync(join(root, "dist/core/session-manager.js"));
+}
+
 function findPiRoot(): string | null {
   if (!hasPi()) return null;
+  // Primary: resolve `which pi` through symlinks and strip the /dist/ tail.
+  // This works when pi is a real bin symlink into the package, but NOT when
+  // `pi` on PATH is a wrapper script (e.g. an nvm-default shim) — realpath
+  // then yields the script itself, with no /dist/ to strip, so the computed
+  // root is bogus. Validate before trusting it, and fall through otherwise.
   try {
     const piBin = execSync("which pi", { encoding: "utf8", stdio: "pipe" }).trim();
     const realBin = realpathSync(piBin);
-    return realBin.replace(/\/dist\/.*$/, "");
-  } catch {
-    try {
-      const globalRoot = execSync("npm root -g", { encoding: "utf8", stdio: "pipe" }).trim();
-      // pi-coding-agent was published under @mariozechner, then renamed to
-      // @earendil-works. Prefer the new scope, fall back to the old one.
-      for (const scope of ["@earendil-works/pi-coding-agent", "@mariozechner/pi-coding-agent"]) {
-        const candidate = join(globalRoot, scope);
-        if (existsSync(candidate)) return candidate;
-      }
-    } catch {}
-  }
+    const root = realBin.replace(/\/dist\/.*$/, "");
+    if (isValidPiRoot(root)) return root;
+  } catch {}
+  // Fallback: the global npm install. pi-coding-agent was published under
+  // @mariozechner, then renamed to @earendil-works. Prefer the new scope.
+  try {
+    const globalRoot = execSync("npm root -g", { encoding: "utf8", stdio: "pipe" }).trim();
+    for (const scope of ["@earendil-works/pi-coding-agent", "@mariozechner/pi-coding-agent"]) {
+      const candidate = join(globalRoot, scope);
+      if (isValidPiRoot(candidate)) return candidate;
+    }
+  } catch {}
   return null;
 }
 
