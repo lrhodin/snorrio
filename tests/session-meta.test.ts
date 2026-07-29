@@ -212,3 +212,73 @@ describe("session-meta: malformed input is tolerated, not fatal", () => {
     assert.equal(sm.sessionIdFromPath("/tmp/2026-01-01_no-uuid-here.jsonl"), null);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Identity resolution (regression: 2026-07-29 write/read id asymmetry)
+//
+// Episodes are named by the id in a session's JSONL header, but resolution used
+// to match on the FILENAME. Pi writes many filenames whose token is unrelated
+// to the header id, so those sessions were unresolvable and recall answered
+// "session not found" for refs that were perfectly correct.
+// ---------------------------------------------------------------------------
+
+describe("identity resolution", () => {
+  // Filename token is deliberately NOT the header id, mirroring the 4-part
+  // names pi emits for subagent sessions.
+  const ODD_NAME = "2026-07-22T19-52-14-788Z_dc2f4859-afd8bb8f-db1b0151-9d43.jsonl";
+  const ODD_ID = "019f8b62-ce90-72b8-82c9-eb18ef515659";
+
+  before(async () => {
+    const { writeFileSync } = await import("node:fs");
+    writeFileSync(
+      join(FAKE_SESSIONS_DIR, ODD_NAME),
+      [
+        JSON.stringify({ type: "session", version: 3, id: ODD_ID }),
+        JSON.stringify({ type: "message", message: { role: "assistant", content: "hi" } }),
+      ].join("\n"),
+    );
+  });
+
+  test("header id is the identity; filename reader declines when there is no uuid", () => {
+    const full = join(FAKE_SESSIONS_DIR, ODD_NAME);
+    assert.equal(sm.sessionIdFromEntries(full), ODD_ID);
+    assert.equal(sm.sessionIdFromPath(full), null);
+  });
+
+  test("findSession resolves by header id even when the filename disagrees", () => {
+    const found = sm.findSession(ODD_ID);
+    assert.ok(found, "should resolve by full canonical id");
+    assert.equal(found!.id, ODD_ID);
+    assert.equal(found!.path.endsWith(ODD_NAME), true);
+  });
+
+  test("resolves by short id prefix", () => {
+    const found = sm.findSession("019f8b62");
+    assert.ok(found, "short prefix should resolve");
+    assert.equal(found!.id, ODD_ID);
+  });
+
+  test("a pasted filename fragment still resolves, returning the canonical id", () => {
+    const found = sm.findSession("dc2f4859-afd8bb8f");
+    assert.ok(found, "filename fragment should still work");
+    assert.equal(found!.id, ODD_ID, "but the id reported must be canonical");
+  });
+
+  test("unknown ref reports not_found", () => {
+    const r = sm.resolveSession("ffffffffffff");
+    assert.equal(r.ok, false);
+    if (!r.ok) assert.equal(r.reason, "not_found");
+  });
+
+  test("colliding prefix reports ambiguity rather than guessing", () => {
+    const r = sm.resolveSession("019f");
+    if (r.ok) return; // only one 019f-prefixed fixture: nothing to disambiguate
+    assert.equal(r.reason, "ambiguous");
+    if (r.reason === "ambiguous") assert.ok(r.matches.length > 1);
+  });
+
+  test("allSessions includes sessions whose filename carries no uuid", () => {
+    const ids = sm.allSessions().map((s) => s.id);
+    assert.ok(ids.includes(ODD_ID), "4-part-named session must not be invisible to the sweep");
+  });
+});

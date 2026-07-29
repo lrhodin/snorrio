@@ -21,7 +21,7 @@ import { join } from "path";
 import { pathToFileURL } from "url";
 import { complete, stream as aiStream, getText, userMessage, SNORRIO_HOME, piRoot, getTimezone, type Message } from "./ai.ts";
 import { sessionMessagesToLlm, type RawSessionMessage } from "./model-independence.ts";
-import { findSession, sessionIdFromPath, type SessionInfo } from "./session-meta.ts";
+import { findSession, resolveSession, sessionIdFromPath, sessionIdFromEntries, type SessionInfo } from "./session-meta.ts";
 import { resolveShaAt, readFileAtSha } from "./versioned-read.ts";
 
 const HOME = process.env.HOME!;
@@ -180,17 +180,41 @@ function recallSession(ref: string, question: string, modelSpec: string | null, 
     return recallPiSession(ref, question, modelSpec, options);
   }
 
-  // UUID lookup
-  const session = findSession(ref);
-  if (!session) return `[recall: session not found — ${ref}]`;
+  // UUID lookup. Be specific about WHY a ref failed: a bare "not found" made a
+  // reader conclude a correctly-reported id had been hallucinated, when in fact
+  // the resolver was blind to it (see the 2026-07-29 write/read id asymmetry).
+  const resolution = resolveSession(ref);
+  if (!resolution.ok) {
+    if (resolution.reason === "ambiguous") {
+      const shown = resolution.matches.slice(0, 8).map((m) => m.id);
+      const more = resolution.matches.length - shown.length;
+      return (
+        `[recall: ambiguous session ref "${ref}" — matches ${resolution.matches.length} sessions. ` +
+        `Use a longer prefix. e.g. ${shown.join(", ")}${more > 0 ? `, +${more} more` : ""}]`
+      );
+    }
+    return (
+      `[recall: no session on disk whose id starts with "${ref}". ` +
+      `Session ids are read from each file's header, not its filename, so a ref that ` +
+      `looks right may simply not exist — check ~/.pi/agent/sessions/ before assuming ` +
+      `an episode cited a bad id.]`
+    );
+  }
 
-  return recallPiSession(session.path, question, modelSpec, options);
+  return recallPiSession(resolution.session.path, question, modelSpec, options);
 }
 
 // ============================================================================
 // DAY RECALL — load all episodes as context
 // ============================================================================
 
+// sessionId -> "YYYY-MM-DD HH:MM" start time, used to sort a day's episodes.
+// Episodes are named by CANONICAL id (from each session's header), but the
+// filename often carries a different token entirely, so index under both:
+// filename token for a pasted-fragment lookup, canonical id for episode names.
+// Indexing only the filename token — the pre-2026-07-29 behaviour — silently
+// missed every 4-part-named session (194 of 299 here), sending them down the
+// header-parse fallback below.
 function buildSessionIndex() {
   const index = new Map<string, string>();
   (function walk(dir: string) {
@@ -200,7 +224,11 @@ function buildSessionIndex() {
         if (d.isDirectory()) { walk(p); continue; }
         if (!d.name.endsWith(".jsonl")) continue;
         const m = d.name.match(/^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-\d{2}-\d{3}Z_(.+)\.jsonl$/);
-        if (m) index.set(m[4], `${m[1]} ${m[2]}:${m[3]}`);
+        if (!m) continue;
+        const started = `${m[1]} ${m[2]}:${m[3]}`;
+        index.set(m[4], started);
+        const canonical = sessionIdFromEntries(p);
+        if (canonical) index.set(canonical, started);
       }
     } catch {}
   })(PI_SESSIONS_DIR);
