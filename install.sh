@@ -22,6 +22,7 @@ main() {
   create_dirs
   create_config
   install_cli
+  install_agents
   install_daemon
   install_dev_hooks
   ensure_path
@@ -153,6 +154,19 @@ create_config() {
 EOF
     echo "  created config"
   fi
+}
+
+# Subagent definitions live in the repo (versioned) but must be discoverable by
+# the herdr subagent framework, which scans ~/.pi/agent/agents/. Symlink rather
+# than copy so a git pull updates them in place.
+install_agents() {
+  local AGENT_DIR="$HOME/.pi/agent/agents"
+  [ -d "$PACKAGE_DIR/agents" ] || return 0
+  mkdir -p "$AGENT_DIR"
+  for a in "$PACKAGE_DIR"/agents/*.md; do
+    [ -e "$a" ] || continue
+    ln -sf "$a" "$AGENT_DIR/$(basename "$a")"
+  done
 }
 
 install_cli() {
