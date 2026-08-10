@@ -88,6 +88,19 @@ command", "quote the relevant passage verbatim", "what was the file path".
 - **`[recall: no data found for X]` is a real answer.** It means the period has
   no recorded sessions — often that history simply starts later than assumed.
   Report it; don't treat it as a failure to route around.
+- **Snorrio is not the only memory.** `~/snorrio/episodes/` has a start date;
+  anything earlier is structurally invisible to `recall` no matter how you
+  phrase the query. Before concluding something was never recorded, check
+  pre-snorrio archives — notably `~/.claude/projects/<slugified-cwd>/`, which
+  holds full Claude Code session transcripts (and sometimes a curated
+  `memory/` directory). Grep those transcripts directly; tool-call payloads in
+  them often contain the verbatim scripts and commands the summaries only
+  allude to.
+- **You may be resumed.** Your caller can reopen this session with a follow-up,
+  so make your notes to yourself worth keeping: state which levels you searched
+  and which came back empty. If you hit a genuine ambiguity that changes the
+  answer, prefer `caller_ping` over guessing — you exit, the caller answers, and
+  you resume with the context intact.
 - **Corroborate before asserting.** Recall reconstructs from summaries and can
   be confidently wrong about specifics. If the answer is a path, command,
   credential, ID, or number that the caller will act on, **verify it against the
