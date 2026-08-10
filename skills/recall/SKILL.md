@@ -12,6 +12,26 @@ Query past sessions and temporal summaries. Recall revives past context and answ
 
 When recall IS needed, use your temporal context to pick the right entry point. Don't guess dates — your caches tell you which week or month a thread lived in.
 
+## Prefer the `recall-digger` subagent
+
+**Default to delegating.** Drilling the hierarchy costs many hops, and every
+intermediate answer — dead ends, "which week was it", partial hits — lands in
+whatever context window runs it. That noise is the whole cost of recall, and it
+doesn't belong in the orchestrator's context.
+
+```
+subagent({ name: "Dig", agent: "recall-digger",
+           task: "Find X. Report the exact <path/command/decision>." })
+```
+
+The digger runs the fan-out below in its own context and returns just the answer
+plus a confidence line. A run that makes fifteen `recall` calls comes back as
+twelve lines.
+
+Run it inline yourself only when the answer is **one hop away** — a known day or
+session id, single question, no searching. Anything requiring "which period was
+this in?" should be delegated.
+
 ## When to use recall
 
 If it happened in a past session and isn't saved as a file, recall is how you find it. Start at the temporal level that covers the time range and drill down.
@@ -46,6 +66,74 @@ recall 50690a64 "What beeper commands did you run?"
 **Always drill down through layers.** Each level only knows about its direct subordinates — a year knows quarters, a quarter knows months, a month knows weeks, a week knows days, a day knows sessions.
 
 At each level, ask a **locating question** — "which day," "which session" — to find where something lives. The content lives at the bottom. Every hop above that is navigation.
+
+### Fan out across siblings, then drill only the hits
+
+Walking a single path down misses anything that lived on a neighbouring branch —
+and you can't tell the difference between "it didn't happen" and "it happened in
+the month I skipped". So at each level, ask **every sibling** a locating
+question, **in parallel**, then descend only into the ones that answer yes.
+
+```
+MONTHS   ask 2026-06, 2026-07, 2026-08 concurrently:
+         "Which week(s) involved X? Name them. If none, say none."
+         → 06: no data · 07: none · 08: W33
+
+WEEKS    drill W33 only: "Which day and which session?"
+         → 08-10, session 019feca6
+
+SESSION  extract: "Reproduce the exact token path and command."
+```
+
+Run siblings concurrently (background them in one bash call, or issue several
+bash calls in a single tool block). Each hop is an LLM call; serializing them
+burns wall-clock for nothing.
+
+### Picking the entry level
+
+No mandated starting point — choose the cheapest level that *certainly contains*
+the answer:
+
+| What you know | Start at |
+|---|---|
+| Exact date | that **day** |
+| "last week", "a few days ago" | **week** |
+| "sometime last month", "when did we set up X" | **month** fan-out |
+| No idea, or possibly long ago | **quarter** / **year** fan-out |
+
+Month-level fan-out is the usual sweet spot: few enough siblings to run at once,
+specific enough that answers name real weeks. When torn, start one level *above*
+your guess — a wasted locating hop costs ~2s, while starting too low makes you
+conclude something never happened.
+
+### Writing locating questions
+
+The fan-out is only as good as the question:
+
+- **Enumerate and name** — "Which week(s) involved X? Name the specific weeks."
+  Not "tell me about X."
+- **Always add "If none, say none."** Without an explicit null option, levels
+  reach for marginal relevance and every sibling looks like a hit.
+- **Disambiguate the thing you actually want.** Ask about "an API token being
+  created or used", not "auth work". A topic can be *discussed* constantly and
+  *administered* never — that gap is the most common source of false hits.
+- **Ask for the pointer** — "name the day and session id" — so the next hop is
+  immediate.
+
+At the bottom, switch from locating to extracting: "reproduce the exact command",
+"quote it verbatim", "what was the file path".
+
+### Trust and corroboration
+
+Recall reconstructs from summaries and **can be confidently wrong about
+specifics**. When the answer is a path, command, credential, ID, or number you're
+about to act on, verify it against the filesystem before relying on it, and keep
+the two claims separate: what was recalled vs what you confirmed. A remembered
+credential path that no longer works is worse than no answer.
+
+`[recall: no data found for X]` is a legitimate finding — that period has no
+recorded sessions, often because history starts later than assumed. Report it
+rather than routing around it.
 
 ### Example: finding a letter someone sent you last week
 
