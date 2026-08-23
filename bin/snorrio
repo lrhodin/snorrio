@@ -214,6 +214,23 @@ if (cmd === "flush") {
   const pid = daemonPid();
   console.log(`Daemon:    ${pid ? `running (PID ${pid})` : "not running"}`);
 
+  // Harness. Snorrio and herdr ship together, so a status line that covers only
+  // the memory half hides half the system.
+  let herdrLine = "not installed";
+  try {
+    execSync("which herdr", { stdio: "pipe" });
+    try {
+      const out = execSync("herdr status server 2>/dev/null", { encoding: "utf8", timeout: 5000 });
+      const version = out.match(/^version:\s*(\S+)/m)?.[1];
+      herdrLine = /status:\s*running/.test(out)
+        ? `server running${version ? ` (${version})` : ""}`
+        : "installed, server not answering";
+    } catch {
+      herdrLine = "installed, server not answering";
+    }
+  } catch {}
+  console.log(`Harness:   ${herdrLine}`);
+
   // Data home
   console.log(`Data home: ${SNORRIO_HOME}`);
 

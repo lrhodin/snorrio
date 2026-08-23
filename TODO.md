@@ -4,9 +4,9 @@ Engineering backlog for the snorrio memory/recall system. Personal and cross-pro
 
 ## Onboarding / ops
 
-- [ ] **`snorrio doctor`** — post-install health check: fire one cheap completion via the configured provider and surface the provider's raw error to the human (auth missing, token expired, quota exhausted, model gone). Today any auth failure produces a successful-looking install where memory silently never forms and the only evidence is in daemon logs nobody reads. Born from the 2026-06-09 fresh-VM onboarding test (finding #1) — but generic: every auth failure mode benefits, and it documents nothing about any particular billing path.
+- [ ] **`snorrio doctor`** — post-install health check: fire one cheap completion via the configured provider and surface the provider's raw error to the human (auth missing, token expired, quota exhausted, model gone). Today any auth failure produces a successful-looking install where memory silently never forms and the only evidence is in daemon logs nobody reads. Born from the 2026-06-09 fresh-VM onboarding test (finding #1) — but generic: every auth failure mode benefits, and it documents nothing about any particular billing path. Structural checks now live in the session-start detector in `dmn-context.ts` (config, dirs, CLIs, daemon, packages, herdr binary/server/hook/resume); what remains for `doctor` is the part no file-existence check can reach — does the provider actually answer.
 
-- [ ] **subagent: `send` should clear a stale done-signal** — interrupting a subagent to steer it ends the turn and fires the done-signal, so a later `subagent wait` returns instantly with a stale result (observed 2026-06-09, onboarding test orchestration). `subagent send` could delete the signal file for that agent before delivering, re-arming `wait`. Doesn't fix the spurious wake at interrupt time (turn-end vs task-end is genuinely ambiguous); it fixes the workflow after a steer.
+- [ ] **Verify SETUP.md on macOS.** Setup is prose now, and the launchd half of R4.1 has never been run by anyone — the vDesk it was derived from is Linux/systemd. First macOS install is the test. Watch for: whether an agent satisfies the unsupervised-restart requirement correctly without a plist template in front of it, and whether Homebrew node makes R5.3's wrapper advice read as noise.
 
 ## Recall
 

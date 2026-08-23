@@ -10,11 +10,17 @@ Your agent has never met you.
 <br>
 <br>
 
+Three lines. Node 22 or newer first.
+
 ```
-curl -sSL snorr.io/install | bash
+npm install -g @earendil-works/pi-coding-agent
+pi install https://github.com/lrhodin/snorrio
+pi
 ```
 
-Then launch pi.
+Then tell it: **set yourself up.**
+
+There is no installer. `SETUP.md` is addressed to the agent.
 
 <br>
 <br>
@@ -34,6 +40,21 @@ not the words, what the words meant.
 
 Days fold into weeks. Weeks into months.  
 Each a different altitude over the same life.
+
+<br>
+<br>
+<br>
+
+Memory is half of it.
+
+The other half is where the work happens —  
+panes that outlive the connection,  
+agents that pick up mid-sentence,  
+helpers you can watch and interrupt.
+
+<br>
+
+The harness is [herdr](https://herdr.dev). It is not optional.
 
 <br>
 <br>

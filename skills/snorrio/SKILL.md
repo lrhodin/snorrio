@@ -1,6 +1,6 @@
 ---
 name: snorrio
-description: This skill should be used when the user mentions snorrio, memory, recall, remembering past sessions, or when you detect snorrio is installed but not fully configured. Covers what snorrio is, setup, and first-session onboarding.
+description: This skill should be used when the user mentions snorrio, memory, recall, remembering past sessions, the herdr harness, or when you detect snorrio is installed but not fully configured. Covers what snorrio is, how memory and the harness fit together, setup, and first-session onboarding.
 version: 1.0.0
 ---
 
@@ -8,11 +8,15 @@ version: 1.0.0
 
 ## What it is
 
-Snorrio gives your agent memory that persists across sessions.
+Snorrio is a way of working with an agent. It has two halves, and they ship together.
 
-Without it, every conversation starts from zero. The agent has no idea what you talked about yesterday, what decisions were made last week, or what trajectory the month has taken. It meets you fresh every time.
+**Memory.** Without it, every conversation starts from zero. The agent has no idea what you talked about yesterday, what decisions were made last week, or what trajectory the month has taken. It meets you fresh every time.
 
 Snorrio fixes this. A daemon watches your sessions. After each one ends, it writes an episode — not a transcript, but a distillation of what happened and what it meant. Those episodes become the raw material for memory at every scale: days, weeks, months, quarters.
+
+**The harness.** Memory answers *what happened before*. The harness is *how work happens now*: [herdr](https://herdr.dev) holds persistent panes and tabs, keeps agents alive across a disconnect, resumes their conversations after a restart, and runs subagents in their own visible terminals instead of hidden inside a tool call. You can watch a subagent work and steer it mid-task.
+
+The two halves are not separable and there is no flag to split them. Setup is [`SETUP.md`](../../SETUP.md) — requirements addressed to an agent, not an installer.
 
 ## How it works
 
@@ -68,13 +72,15 @@ Snorrio installs as a pi package. Skills and extensions are auto-discovered.
     session-meta.ts
     context.ts                     # shared context loading
   skills/                          # auto-discovered by pi
-    recall/  snorrio/  dmn/
-    llm-pipe/  subagent/
+    recall/  snorrio/  dmn/  llm-pipe/  handoff/
+  agents/                          # subagent definitions, symlinked into
+    recall-digger.md               #   ~/.pi/agent/agents/ for discovery
   extensions/                      # auto-discovered by pi
     dmn-context.ts                 # context injection + setup detection
-    subagent-signal.ts             # subagent completion signaling
+    cross-model-thinking.ts
   bin/
     snorrio                        # CLI: flush, status, update
+  SETUP.md                         # setup requirements, addressed to the agent
 
 ~/snorrio/                         # mutable data only
   episodes/                        # episode markdown, by date
@@ -86,208 +92,35 @@ Snorrio installs as a pi package. Skills and extensions are auto-discovered.
 
 ## Setup
 
-### 1. Understand the codebase
+**Setup lives in [`SETUP.md`](../../SETUP.md), at the root of this package.** It is
+written as conditions that must hold, with the reasoning behind each and the exact
+values that cannot be guessed — not as a script. Read it and satisfy it. There is
+no installer, by design: you can see the machine, and a script written months ago
+cannot.
 
-You should never install something you could not explain to your human. Explore the repo — read the daemon, the recall engine, the context injection, the skills. Understand how episodes are generated, how temporal summaries fold, how recall works. Then tell your human what this is, how it will help you, how it will help them, and ask if they have any questions or would like to proceed.
+Two things to do before you start:
 
-### 2. Detection
+**1. Understand what you are installing.** You should never install something you
+could not explain to your human. Read the daemon, the recall engine, the context
+injection, the skills. Then tell them what this is, how it will help you, how it
+will help them, and ask whether they have questions.
 
-Check these in order. Skip anything already done:
+**2. Check what is already true.** Every requirement may already be satisfied.
+`snorrio status` and `herdr status` between them cover most of it, and the
+session-start check in `dmn-context.ts` names anything missing every time a session
+opens. Re-running setup is normal; clobbering existing config is not.
 
-```bash
-# 1. Snorrio installed as pi package?
-pi list 2>/dev/null | grep snorrio
+## Fixing one broken piece
 
-# 2. Config exists?
-cat ~/snorrio/config/config.json 2>/dev/null
+`SETUP.md` is organised as numbered requirements (R1.1, R4.2, R5.5 …). When the
+session-start check reports a problem it names the requirement, so go to that
+section rather than re-reading the whole document or re-running setup wholesale.
 
-# 3. Data directories exist?
-ls ~/snorrio/episodes 2>/dev/null
-
-# 4. Daemon running?
-launchctl list io.snorrio.dmn 2>/dev/null
-
-# 5. CLIs accessible?
-which recall 2>/dev/null && which snorrio 2>/dev/null
-```
-
-### 3. Install
-
-If snorrio isn't installed yet, have the user run the install script:
+Two commands cover most diagnosis:
 
 ```bash
-curl -sSL snorr.io/install | bash
-```
-
-This handles everything: prerequisites (brew, node, pi), package installation, config, CLIs, daemon. If the user has already run it, the script is idempotent.
-
-For manual setup or fixing individual issues, the steps below cover each piece:
-
-#### 1. Package install
-
-```bash
-pi install https://github.com/lrhodin/snorrio
-```
-
-This clones the repo to `~/.pi/agent/git/github.com/lrhodin/snorrio/`, registers skills, and discovers extensions automatically.
-
-#### 2. Data directories
-
-```bash
-SNORRIO_HOME=~/snorrio
-mkdir -p "$SNORRIO_HOME"/{episodes,cache/{days,weeks,months,quarters,years},logs,config}
-```
-
-#### 2. Config file
-
-```bash
-mkdir -p ~/snorrio/config
-cat > ~/snorrio/config/config.json << 'EOF'
-{
-  "model": "opus",
-  "timezone": null,
-  "tools": {}
-}
-EOF
-```
-
-- `timezone`: auto-detected if null. Override with e.g. `"America/Los_Angeles"`.
-
-#### 3. CLI tools
-
-```bash
-PACKAGE_DIR=~/.pi/agent/git/github.com/lrhodin/snorrio
-mkdir -p ~/.local/bin
-
-chmod +x "$PACKAGE_DIR/src/recall-engine.ts"
-ln -sf "$PACKAGE_DIR/src/recall-engine.ts" ~/.local/bin/recall
-
-chmod +x "$PACKAGE_DIR/bin/snorrio"
-ln -sf "$PACKAGE_DIR/bin/snorrio" ~/.local/bin/snorrio
-
-chmod +x "$PACKAGE_DIR/skills/subagent/subagent.mjs"
-ln -sf "$PACKAGE_DIR/skills/subagent/subagent.mjs" ~/.local/bin/subagent
-```
-
-Ensure `~/.local/bin` is on PATH. Verify: `which recall && which snorrio && which subagent`
-
-#### 4. Daemon (macOS launchd)
-
-Find node and set paths: `NODE=$(which node)`, `NODE_DIR=$(dirname $NODE)`, `PACKAGE_DIR=~/.pi/agent/git/github.com/lrhodin/snorrio`, `SNORRIO_HOME=~/snorrio`
-
-Write `~/Library/LaunchAgents/io.snorrio.dmn.plist`:
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>io.snorrio.dmn</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>NODE</string>
-    <string>PACKAGE_DIR/src/episode-daemon.ts</string>
-  </array>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>HOME</key>
-    <string>HOME_DIR</string>
-    <key>PATH</key>
-    <string>HOME_DIR/.local/bin:/opt/homebrew/bin:NODE_DIR:/usr/local/bin:/usr/bin:/bin</string>
-    <key>SNORRIO_HOME</key>
-    <string>HOME_DIR/snorrio</string>
-  </dict>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>KeepAlive</key>
-  <true/>
-  <key>StandardOutPath</key>
-  <string>HOME_DIR/snorrio/logs/daemon-stdout.log</string>
-  <key>StandardErrorPath</key>
-  <string>HOME_DIR/snorrio/logs/daemon-stderr.log</string>
-</dict>
-</plist>
-```
-
-Replace NODE, NODE_DIR, PACKAGE_DIR, HOME_DIR with actual values.
-
-```bash
-launchctl bootout gui/$(id -u)/io.snorrio.dmn 2>/dev/null || true
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.snorrio.dmn.plist
-```
-
-Verify: `launchctl list io.snorrio.dmn` — PID present means success.
-
-#### 4b. Daemon (Linux systemd user service)
-
-On Linux, use a systemd user service instead of launchd.
-
-Find node: `NODE=$(which node)`, `NODE_DIR=$(dirname $NODE)`, `PACKAGE_DIR=~/.pi/agent/git/github.com/lrhodin/snorrio`
-
-Write `~/.config/systemd/user/io.snorrio.dmn.service`:
-
-```ini
-[Unit]
-Description=Snorrio episode daemon
-After=default.target
-
-[Service]
-Type=simple
-ExecStart=NODE PACKAGE_DIR/src/episode-daemon.ts
-Restart=always
-RestartSec=5
-Environment=HOME=HOME_DIR
-Environment=PATH=HOME_DIR/.local/bin:NODE_DIR:/usr/local/bin:/usr/bin:/bin
-Environment=SNORRIO_HOME=HOME_DIR/snorrio
-StandardOutput=append:HOME_DIR/snorrio/logs/daemon-stdout.log
-StandardError=append:HOME_DIR/snorrio/logs/daemon-stderr.log
-
-[Install]
-WantedBy=default.target
-```
-
-Replace NODE, NODE_DIR, PACKAGE_DIR, HOME_DIR with actual values.
-
-```bash
-systemctl --user daemon-reload
-systemctl --user enable --now io.snorrio.dmn.service
-loginctl enable-linger $(whoami)   # survive logout/reboot
-```
-
-Verify: `systemctl --user status io.snorrio.dmn.service` — active (running) means success.
-
-#### 5. Extensions and skills
-
-When installed via `pi install`, extensions and skills are auto-discovered from the `extensions/` and `skills/` directories. No manual linking needed.
-
-**Stale cleanup** (from previous installs):
-- Remove `~/.pi/agent/extensions/dmn-context.ts` if it's a symlink to an old path (e.g., `~/snorrio/adapters/pi/`)
-- Remove `~/.pi/agent/extensions/recall-tool.ts` and `done-command.ts` if they're real files (not symlinks)
-- Remove `~/snorrio/skills` from the `skills` array in `~/.pi/agent/settings.json` if present (package handles this now)
-
-#### 6. Passwordless sudo (optional)
-
-Everything above is user-scoped — no sudo required. But going forward, your agent may need sudo for system tasks (installing packages, managing services). A password prompt will stall an autonomous agent.
-
-Ask your human if they'd like to enable passwordless sudo. If so, give them this exact command to run in a terminal themselves:
-
-```
-sudo sh -c 'echo "$(whoami) ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/$(whoami)'
-```
-
-This is the last thing they'll need to type manually. After this, the agent can handle everything.
-
-#### 7. Verify
-
-```bash
-snorrio status                          # daemon + system status (cross-platform)
-which recall                            # CLI accessible
-which snorrio                           # admin CLI accessible
-
-# Or check the daemon directly:
-launchctl list io.snorrio.dmn                    # macOS
-systemctl --user status io.snorrio.dmn.service   # Linux
+snorrio status          # daemon PID, harness server, data home, episodes, config
+herdr status            # harness client and server, versions, socket path
 ```
 
 ## First session
