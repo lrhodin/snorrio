@@ -11,13 +11,24 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { applyStamps, GAP_MS } from "../extensions/dmn-context.ts";
+import { applyStamps, composeInjectedPrompt, GAP_MS } from "../extensions/dmn-context.ts";
 
 const TZ = "UTC";
 
 // 2026-05-02 14:30:00 UTC
 const T0 = Date.UTC(2026, 4, 2, 14, 30, 0);
 const STAMP_T0 = "Sat, May 2, 2:30 PM UTC";
+
+test("prompt composition uses freshly supplied date/context on every turn", () => {
+  const base = "Current date: 2026-08-23\nbase";
+  const first = composeInjectedPrompt(base, "2026-08-23", "setup-once", "cache-v1");
+  const second = composeInjectedPrompt(base, "2026-08-24", "setup-once", "cache-v2");
+  assert.match(first, /Current date: 2026-08-23/);
+  assert.match(first, /cache-v1/);
+  assert.match(second, /Current date: 2026-08-24/);
+  assert.match(second, /cache-v2/);
+  assert.doesNotMatch(second, /cache-v1/);
+});
 
 test("steady cadence — first and last stamped, no silence markers", () => {
   const msgs: any[] = [

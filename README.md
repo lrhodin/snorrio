@@ -1,75 +1,52 @@
 # [snorr.io](https://snorr.io)
 
-<br>
-<br>
-<br>
-<br>
+Snorrio is a reproducible, evolving system for driving AI work. Today that system
+is Pi, Herdr, visible subagents, and temporal memory/recall. Pi is the current
+agent runtime and Herdr is the current persistent harness; Snorrio is not merely a
+memory library, and its architecture is not permanently defined by one optional
+Pi control package.
 
-Your agent has never met you.
+The daemon writes what happened after a session goes quiet—not a transcript, but
+an episode of what the work meant. Episodes fold into days, weeks, months,
+quarters, and years. Herdr supplies panes that survive disconnects and agents you
+can watch, steer, and resume.
 
-<br>
-<br>
+Memory, configuration, and session history remain plain text on your machine. Model requests follow the privacy terms of whichever provider you configure.
 
-Three lines. Node 22 or newer first.
+## Start
 
-```
+Install Node 22 or newer, then:
+
+```sh
 npm install -g @earendil-works/pi-coding-agent
 pi install https://github.com/lrhodin/snorrio
 pi
 ```
 
-Then tell it: **set yourself up.**
+Tell Pi: **set yourself up.** `SETUP.md` is addressed to the agent and is the
+authoritative onboarding procedure.
 
-There is no installer. `SETUP.md` is addressed to the agent.
+Setup is not finished while Pi is still in the bootstrap terminal. After the
+agent has configured and verified the services:
 
-<br>
-<br>
-<br>
-<br>
-<br>
-<br>
+1. Exit that bootstrap Pi session.
+2. Launch or attach Herdr from an ordinary shell with `herdr`.
+3. In a Herdr-managed pane, run `pi` and continue there.
 
-A daemon wakes in the silence after.
+Do not run `herdr` when `HERDR_ENV=1`; that would nest Herdr. Inside the final Pi
+pane, runtime verification must show:
 
-It writes what happened —  
-not the words, what the words meant.
+```sh
+test "$HERDR_ENV" = 1
+printf '%s\n' "$HERDR_WORKSPACE_ID" "$HERDR_TAB_ID" "$HERDR_PANE_ID" "$HERDR_SOCKET_PATH"
+herdr status server --json
+herdr integration status
+snorrio status
+```
 
-<br>
-<br>
-<br>
-
-Days fold into weeks. Weeks into months.  
-Each a different altitude over the same life.
-
-<br>
-<br>
-<br>
-
-Memory is half of it.
-
-The other half is where the work happens —  
-panes that outlive the connection,  
-agents that pick up mid-sentence,  
-helpers you can watch and interrupt.
-
-<br>
-
-The harness is [herdr](https://herdr.dev). It is not optional.
-
-<br>
-<br>
-<br>
-<br>
-
-Plain text. Your machine. Nothing leaves.
-
-<br>
-<br>
-
-The rest reveals itself through use.  
-Your agent can explain the architecture — the source is open.
-
-<br>
-<br>
+All four Herdr IDs must be nonempty, the server must be compatible/current, the
+Pi integration must be `current`, and `pi-herdr-subagents` must expose
+`subagent`, `subagent_interrupt`, `subagent_resume`, and `subagents_list` in the
+fresh Pi session. `subagents_list` must include `recall-digger`.
 
 MIT

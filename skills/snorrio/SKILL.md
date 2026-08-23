@@ -8,7 +8,9 @@ version: 1.0.0
 
 ## What it is
 
-Snorrio is a way of working with an agent. It has two halves, and they ship together.
+Snorrio is a reproducible, evolving way of driving AI work. Its current stack is
+Pi + Herdr + agents + memory/recall; it is not permanently just a memory package
+or permanently defined by one optional Pi control package.
 
 **Memory.** Without it, every conversation starts from zero. The agent has no idea what you talked about yesterday, what decisions were made last week, or what trajectory the month has taken. It meets you fresh every time.
 
@@ -16,7 +18,10 @@ Snorrio fixes this. A daemon watches your sessions. After each one ends, it writ
 
 **The harness.** Memory answers *what happened before*. The harness is *how work happens now*: [herdr](https://herdr.dev) holds persistent panes and tabs, keeps agents alive across a disconnect, resumes their conversations after a restart, and runs subagents in their own visible terminals instead of hidden inside a tool call. You can watch a subagent work and steer it mid-task.
 
-The two halves are not separable and there is no flag to split them. Setup is [`SETUP.md`](../../SETUP.md) — requirements addressed to an agent, not an installer.
+The current memory and harness layers are installed and verified together. Setup
+is [`SETUP.md`](../../SETUP.md) — requirements addressed to an agent, not an
+installer. `pi-herdr-subagents` is required today; `@ogulcancelik/pi-herdr` is an
+optional control surface, not an architectural dependency.
 
 ## How it works
 
@@ -53,11 +58,11 @@ Options: `--model <alias>` (default: opus), `--context` (situated witness mode).
 
 ### Context injection
 
-At session start, cached summaries (today, this week, this month) are injected into the conversation via a pi extension. The agent wakes up already knowing what's been happening.
+The Pi extension injects cached summaries for the current day, week, month, quarter, and year. It refreshes those cheap local reads before each turn, so long-lived Herdr sessions cross midnight and observe newly generated memory without a restart.
 
 ### Local and private
 
-Everything stays on your machine. No cloud, no telemetry.
+Memory, configuration, and session history stay on your machine. Model requests still go to whichever provider the human configures; Snorrio adds no telemetry of its own.
 
 ## Architecture
 
@@ -71,6 +76,8 @@ Snorrio installs as a pi package. Skills and extensions are auto-discovered.
     ai.ts
     session-meta.ts
     context.ts                     # shared context loading
+    session-lineage.ts             # ancestry + evidence-dependency families
+    cache-provenance.ts            # machine-readable temporal sidecars
   skills/                          # auto-discovered by pi
     recall/  snorrio/  dmn/  llm-pipe/  handoff/
   agents/                          # subagent definitions, symlinked into
@@ -106,7 +113,7 @@ injection, the skills. Then tell them what this is, how it will help you, how it
 will help them, and ask whether they have questions.
 
 **2. Check what is already true.** Every requirement may already be satisfied.
-`snorrio status` and `herdr status` between them cover most of it, and the
+`snorrio status` and `herdr status server` between them cover most of it, and the
 session-start check in `dmn-context.ts` names anything missing every time a session
 opens. Re-running setup is normal; clobbering existing config is not.
 
@@ -116,11 +123,12 @@ opens. Re-running setup is normal; clobbering existing config is not.
 session-start check reports a problem it names the requirement, so go to that
 section rather than re-reading the whole document or re-running setup wholesale.
 
-Two commands cover most diagnosis:
+These commands cover most diagnosis:
 
 ```bash
-snorrio status          # daemon PID, harness server, data home, episodes, config
-herdr status            # harness client and server, versions, socket path
+snorrio status          # liveness and supervision are reported separately
+herdr status server     # live server version, compatibility, socket path
+herdr integration status # Pi integration must be current
 ```
 
 ## First session

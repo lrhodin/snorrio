@@ -281,4 +281,19 @@ describe("identity resolution", () => {
     const ids = sm.allSessions().map((s) => s.id);
     assert.ok(ids.includes(ODD_ID), "4-part-named session must not be invisible to the sweep");
   });
+
+  test("a lineage-only child remains discoverable and directly resolvable", async () => {
+    const { writeFileSync } = await import("node:fs");
+    const childId = "01a03037-e428-7a59-a839-18949fc4bdcc";
+    const childName = "2026-08-23T20-02-43-336Z_f1731c41-bf94c3d9-e227b359-d6ca.jsonl";
+    writeFileSync(join(FAKE_SESSIONS_DIR, childName), [
+      JSON.stringify({ type: "session", version: 3, id: childId, parentSession: fixturePath(FIXTURES[0].file) }),
+      JSON.stringify({ type: "message", message: { role: "assistant", content: "child result" } }),
+    ].join("\n"));
+
+    const found = sm.findSession(childId);
+    assert.ok(found);
+    assert.equal(found!.id, childId);
+    assert.equal(found!.path.endsWith(childName), true);
+  });
 });

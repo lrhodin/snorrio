@@ -30,8 +30,8 @@ Verified against the repo and live `~/snorrio` on 2026-06-06. Key facts that con
 
 | Concern | Current reality | File / symbol |
 |---|---|---|
-| Episodes | `~/snorrio/episodes/YYYY-MM-DD/<session-uuid>.md`, YAML frontmatter (`origin/machine/source/timestamp`) + LLM prose. ~2307 files. | `episode-daemon.ts:buildFrontmatter`, `generateEpisode` |
-| Caches | `~/snorrio/cache/<dir>/<ref>.md`, **bare prose, no frontmatter**, one per (layer, ref). | `episode-daemon.ts:rebuildCache` |
+| Episodes | `~/snorrio/episodes/YYYY-MM-DD/<session-uuid>.md`, YAML frontmatter (`origin/machine/source/timestamp` plus session lineage/provenance-family metadata on newly generated episodes) + LLM prose. Legacy episodes without lineage fields remain readable. ~2307 files. | `episode-frontmatter.ts`, `episode-daemon.ts:generateEpisode` |
+| Caches | `~/snorrio/cache/<dir>/<ref>.md` remains bare prose. Each production write also atomically replaces `<ref>.provenance.json`, a schema-versioned mapping of provenance families and session IDs used by the next synthesis level. | `cache-provenance.ts`, `episode-daemon.ts:rebuildCache` |
 | Layers | 5, **hardcoded and duplicated** in 4 files. No registry. | `cascade-decision.ts:CASCADE_ORDER`, `episode-daemon.ts`, `context.ts`, `recall-engine.ts` |
 | Generation chokepoint | A cache is the verbatim output of `recall(ref, CACHE_Q_<level>, null)`. | `episode-daemon.ts:rebuildCache` → `recall-engine.ts:recall` |
 | Cascade | Every live episode **unconditionally** rebuilds day→week→month→quarter→year, each level reading the *current* (just-regenerated) child caches. | `cascade-decision.ts:decideCascade`, `episode-daemon.ts:batchCascade` |

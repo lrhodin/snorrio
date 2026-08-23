@@ -16,13 +16,15 @@
 //   recall 2026-03-05 "What shipped today?"
 //   recall 2026-W09 "What was the main thread?"
 
-import { readFileSync, readdirSync, existsSync, writeFileSync, mkdirSync, realpathSync } from "fs";
+import { readFileSync, readdirSync, existsSync, realpathSync } from "fs";
 import { join } from "path";
 import { pathToFileURL } from "url";
-import { complete, stream as aiStream, getText, userMessage, SNORRIO_HOME, piRoot, getTimezone, type Message } from "./ai.ts";
+import { complete, stream as aiStream, getText, userMessage, SNORRIO_HOME, piRoot, getTimezone } from "./ai.ts";
 import { sessionMessagesToLlm, type RawSessionMessage } from "./model-independence.ts";
-import { findSession, resolveSession, sessionIdFromPath, sessionIdFromEntries, type SessionInfo } from "./session-meta.ts";
+import { resolveSession, sessionIdFromEntries, type SessionInfo } from "./session-meta.ts";
 import { resolveShaAt, readFileAtSha } from "./versioned-read.ts";
+import { getSessionLineageIndex, resolveLineageSession } from "./session-lineage.ts";
+import { ensureCacheProvenanceManifest, formatManifestForPrompt, writeCacheWithProvenance, type CacheLevel, type CacheProvenanceManifest } from "./cache-provenance.ts";
 
 const HOME = process.env.HOME!;
 const PI_SESSIONS_DIR = join(HOME, ".pi/agent/sessions");
@@ -183,7 +185,10 @@ function recallSession(ref: string, question: string, modelSpec: string | null, 
   // UUID lookup. Be specific about WHY a ref failed: a bare "not found" made a
   // reader conclude a correctly-reported id had been hallucinated, when in fact
   // the resolver was blind to it (see the 2026-07-29 write/read id asymmetry).
-  const resolution = resolveSession(ref);
+  const baseResolution = resolveSession(ref);
+  const resolution = !baseResolution.ok && baseResolution.reason === "not_found"
+    ? resolveLineageSession(ref)
+    : baseResolution;
   if (!resolution.ok) {
     if (resolution.reason === "ambiguous") {
       const shown = resolution.matches.slice(0, 8).map((m) => m.id);
@@ -235,7 +240,39 @@ function buildSessionIndex() {
   return index;
 }
 
-function loadEpisodes(dateStr: string) {
+export interface LoadedEpisode {
+  sessionId: string;
+  sortKey: string;
+  content: string;
+  provenanceFamilyId: string;
+  rootSessionId: string;
+  parentSessionId: string | null;
+  lineageComplete: boolean;
+  lineageConflict: boolean;
+  lineageSource: string;
+}
+
+export interface ProvenanceFamily {
+  provenanceFamilyId: string;
+  episodes: LoadedEpisode[];
+  sortKey: string;
+}
+
+function frontmatterValue(content: string, key: string): string | null {
+  if (!content.startsWith("---\n")) return null;
+  const end = content.indexOf("\n---\n", 4);
+  if (end < 0) return null;
+  const match = content.slice(4, end).match(new RegExp(`^${key}:\\s*(.+)$`, "m"));
+  if (!match) return null;
+  const raw = match[1].trim();
+  if (raw === "null") return null;
+  if (raw.startsWith('"')) {
+    try { return JSON.parse(raw); } catch { return null; }
+  }
+  return raw;
+}
+
+function loadEpisodes(dateStr: string): LoadedEpisode[] {
   const dir = join(EPISODES_DIR, dateStr);
   if (!existsSync(dir)) return [];
 
@@ -243,38 +280,112 @@ function loadEpisodes(dateStr: string) {
   if (!files.length) return [];
 
   const sessionIndex = buildSessionIndex();
-  const episodes: Array<{ sessionId: string; sortKey: string; content: string }> = [];
+  const lineageIndex = getSessionLineageIndex();
+  const episodes: LoadedEpisode[] = [];
 
   for (const file of files) {
     const content = readFileSync(join(dir, file), "utf8").trim();
-    const sessionId = file.replace(".md", "");
+    const fileSessionId = file.replace(".md", "");
+    const sessionId = frontmatterValue(content, "session_id") || fileSessionId;
+    const indexed = lineageIndex.getById(sessionId);
+    const metadataCurrent = frontmatterValue(content, "lineage_metadata_version") === "1";
+    const hasStructuralEdge = indexed && indexed.lineageSource !== "none" && indexed.lineageSource !== "unknown";
+    // Live structural edges supersede stale episode metadata (for example a
+    // later resume consumer). Historical unlinked sessions retain their
+    // migrated unknown/incomplete marker rather than being promoted to roots.
+    const provenanceFamilyId = hasStructuralEdge
+      ? indexed.provenanceFamilyId
+      : frontmatterValue(content, "provenance_family_id") || indexed?.provenanceFamilyId || sessionId;
+    const rootSessionId = hasStructuralEdge
+      ? indexed.rootSessionId
+      : frontmatterValue(content, "root_session_id") || indexed?.rootSessionId || sessionId;
+    const parentSessionId = hasStructuralEdge
+      ? indexed.parentSessionId
+      : frontmatterValue(content, "parent_session_id") || indexed?.parentSessionId || null;
+    const completeValue = frontmatterValue(content, "lineage_complete");
+    const conflictValue = frontmatterValue(content, "lineage_conflict");
+    const persistedSource = frontmatterValue(content, "lineage_source");
+    const explicitComplete = completeValue === "true" ? true : completeValue === "false" ? false : null;
+    const explicitConflict = conflictValue === "true" ? true : conflictValue === "false" ? false : null;
+    // A legacy episode with no persisted lineage and no recoverable structural
+    // edge is epistemically unknown. The presence of a standalone session file
+    // does not prove that it was never a delegated child.
+    const lineageComplete = hasStructuralEdge
+      ? indexed.lineageComplete
+      : metadataCurrent ? explicitComplete ?? false : false;
+    const lineageConflict = hasStructuralEdge ? indexed.lineageConflict : explicitConflict ?? false;
+    const lineageSource = hasStructuralEdge
+      ? indexed.lineageSource
+      : metadataCurrent ? persistedSource || "unknown" : "unknown";
     let sortKey = sessionIndex.get(sessionId);
     if (!sortKey) {
       // Capture start time (group 2) and optional end time (group 3).
       // Sort by start; end appended as natural string tiebreak.
-      // Prior bug: only end time was captured, so single-time and ranged
-      // headers collapsed inconsistently — single → 00:00, ranged → end.
       const headerMatch = content.match(/<!--\s*session:\s*\S+\s*\|\s*(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})(?:→(\d{2}:\d{2}))?\s*\|/);
       sortKey = headerMatch
         ? `${headerMatch[1]} ${headerMatch[2]}${headerMatch[3] ? "→" + headerMatch[3] : ""}`
         : `${dateStr} 00:00`;
     }
-    episodes.push({ sessionId, sortKey, content });
+    episodes.push({ sessionId, sortKey, content, provenanceFamilyId, rootSessionId, parentSessionId, lineageComplete, lineageConflict, lineageSource });
   }
 
-  episodes.sort((a, b) => a.sortKey.localeCompare(b.sortKey));
+  episodes.sort((a, b) => a.sortKey.localeCompare(b.sortKey) || a.sessionId.localeCompare(b.sessionId));
   return episodes;
+}
+
+export function groupEpisodesByProvenance(episodes: LoadedEpisode[]): ProvenanceFamily[] {
+  const grouped = new Map<string, LoadedEpisode[]>();
+  for (const episode of episodes) {
+    const family = grouped.get(episode.provenanceFamilyId) ?? [];
+    family.push(episode);
+    grouped.set(episode.provenanceFamilyId, family);
+  }
+  return [...grouped].map(([provenanceFamilyId, familyEpisodes]) => {
+    familyEpisodes.sort((a, b) => a.sortKey.localeCompare(b.sortKey) || a.sessionId.localeCompare(b.sessionId));
+    return { provenanceFamilyId, episodes: familyEpisodes, sortKey: familyEpisodes[0].sortKey };
+  }).sort((a, b) => a.sortKey.localeCompare(b.sortKey) || a.provenanceFamilyId.localeCompare(b.provenanceFamilyId));
+}
+
+export function formatDayEvidenceContext(episodes: LoadedEpisode[]): string {
+  const families = groupEpisodesByProvenance(episodes);
+  return families.map((family, familyIndex) => {
+    const ids = family.episodes.map((episode) => episode.sessionId);
+    const complete = family.episodes.every((episode) => episode.lineageComplete);
+    const conflict = family.episodes.some((episode) => episode.lineageConflict);
+    const header = [
+      `--- Evidence source ${familyIndex + 1}/${families.length}: provenance family ${family.provenanceFamilyId} ---`,
+      `ONE evidence source; ${family.episodes.length} session${family.episodes.length === 1 ? "" : "s"}: ${ids.join(", ")}`,
+      `lineage: ${complete && !conflict ? "complete" : conflict ? "conflicted/incomplete — do not infer missing links" : "unknown/incomplete — do not treat as independent corroboration"}`,
+    ].join("\n");
+    const bodies = family.episodes.map((episode, episodeIndex) =>
+      `### Family session ${episodeIndex + 1}/${family.episodes.length} (${episode.sessionId})\n${episode.content}`
+    ).join("\n\n");
+    return `${header}\n${bodies}`;
+  }).join("\n\n");
+}
+
+export const PROVENANCE_SYNTHESIS_INSTRUCTIONS = `Treat each provenance_family_id as ONE evidence source, even when it contains parent and child sessions or appears on multiple dates. Preserve every session's content and session ID, but never count a parent's restatement of a child's work as independent corroboration. Machine-readable provenance manifests in the context are authoritative even if an LLM summary omitted their IDs. Carry exact provenance_family_id values into the answer for every factual thread so the same family can be recognized at day, week, month, quarter, and year levels. Unrelated family IDs are separate evidence sources. If lineage is incomplete or conflicted, say so rather than inventing a relationship.`;
+
+function childManifest(level: CacheLevel, ref: string, atSha?: string | null): CacheProvenanceManifest | { schemaVersion: 0; level: CacheLevel; ref: string; missing: true } {
+  if (atSha) {
+    const raw = readFileAtSha(atSha, `cache/${level === "day" ? "days" : level === "week" ? "weeks" : level === "month" ? "months" : level === "quarter" ? "quarters" : "years"}/${ref}.provenance.json`);
+    if (raw) {
+      try { return JSON.parse(raw) as CacheProvenanceManifest; } catch {}
+    }
+    return { schemaVersion: 0, level, ref, missing: true };
+  }
+  return ensureCacheProvenanceManifest(level, ref);
 }
 
 function recallDay(dateStr: string, question: string, modelSpec: string | null, onChunk?: OnChunk) {
   const episodes = loadEpisodes(dateStr);
   if (episodes.length === 0) return `[recall: no episodes found for ${dateStr}]`;
 
-  const context = episodes.map((ep, i) =>
-    `--- Episode ${i + 1}/${episodes.length} (session ${ep.sessionId}) ---\n${ep.content}`
-  ).join("\n\n");
+  const context = formatDayEvidenceContext(episodes);
 
-  const systemPrompt = `You are a recall agent for ${dateStr}. Your context is episode summaries from every session that day, in chronological order. Each episode covers one conversation session.
+  const systemPrompt = `You are a recall agent for ${dateStr}. Your context contains every episode from that day, ordered into provenance families. Parent and descendant sessions remain fully visible but each family is one evidence source.
+
+${PROVENANCE_SYNTHESIS_INSTRUCTIONS}
 
 Be precise — use session IDs, times, exact details. When referencing a specific session, name it so the caller can drill into raw session context for verbatim detail. If your context doesn't contain enough detail, say which session(s) likely have the answer.`;
 
@@ -305,7 +416,7 @@ function weekDates(weekStr: string) {
 
 async function recallWeek(weekStr: string, question: string, modelSpec: string | null, onChunk?: OnChunk, atSha?: string | null) {
   const dates = weekDates(weekStr);
-  const daySummaries: Array<{ date: string; episodeCount: number; summary: string }> = [];
+  const daySummaries: Array<{ date: string; episodeCount: number; summary: string; manifest: ReturnType<typeof childManifest> }> = [];
 
   for (const dateStr of dates) {
     const episodes = loadEpisodes(dateStr);
@@ -327,21 +438,22 @@ async function recallWeek(weekStr: string, question: string, modelSpec: string |
     } else {
       summary = await recallDay(dateStr, "Write the narrative of this day. Not a checklist — an account of what happened, what was worked on, what got decided, what changed, and why. Track commitments made for today but don't carry weekly or longer-term goals — mention them naturally so higher temporal levels can pick them up. Include session IDs so any thread can be traced back to its source session.", modelSpec) as string;
       if (summary && !summary.startsWith("[recall:")) {
-        mkdirSync(join(CACHE_DIR, "days"), { recursive: true });
-        writeFileSync(cachePath, summary);
+        writeCacheWithProvenance("day", dateStr, summary);
       }
     }
 
-    daySummaries.push({ date: dateStr, episodeCount: episodes.length, summary });
+    daySummaries.push({ date: dateStr, episodeCount: episodes.length, summary, manifest: childManifest("day", dateStr, atSha) });
   }
 
   if (daySummaries.length === 0) return `[recall: no data found for ${weekStr}]`;
 
   const context = daySummaries.map(d =>
-    `--- ${d.date} (${d.episodeCount} episodes) ---\n${d.summary}`
+    `--- ${d.date} (${d.episodeCount} episodes) ---\nPROVENANCE_MANIFEST ${formatManifestForPrompt(d.manifest as CacheProvenanceManifest)}\n${d.summary}`
   ).join("\n\n");
 
   const systemPrompt = `You are a recall agent for week ${weekStr}. Your context is day-level summaries for each day that had activity. Each summary covers all sessions from that day.
+
+${PROVENANCE_SYNTHESIS_INSTRUCTIONS}
 
 You operate at week resolution — individual session details live one level down in day summaries, verbatim detail lives two levels down in raw sessions. Name specific days or sessions when referencing detail so the caller can drill deeper. If your context doesn't contain enough detail, say which day likely has the answer.`;
 
@@ -385,7 +497,7 @@ function weekHasData(weekStr: string) {
 
 async function recallMonth(monthStr: string, question: string, modelSpec: string | null, onChunk?: OnChunk, atSha?: string | null) {
   const weeks = monthWeeks(monthStr);
-  const weekSummaries: Array<{ week: string; activeDays: number; summary: string }> = [];
+  const weekSummaries: Array<{ week: string; activeDays: number; summary: string; manifest: ReturnType<typeof childManifest> }> = [];
 
   for (const weekStr of weeks) {
     if (!weekHasData(weekStr)) continue;
@@ -403,23 +515,24 @@ async function recallMonth(monthStr: string, question: string, modelSpec: string
     } else {
       summary = await recallWeek(weekStr, "Write the narrative of this week. Not a checklist — an essay that identifies the main threads, arc, and trajectory. What's developing across multiple days? What started, what stalled, what shifted? Operate at week resolution — don't repeat daily details, surface the patterns that are only visible across days. Reference specific dates so the reader can drill down.", modelSpec) as string;
       if (summary && !summary.startsWith("[recall:")) {
-        mkdirSync(join(CACHE_DIR, "weeks"), { recursive: true });
-        writeFileSync(cachePath, summary);
+        writeCacheWithProvenance("week", weekStr, summary);
       }
     }
 
     const dates = weekDates(weekStr);
     const activeDays = dates.filter(d => loadEpisodes(d).length > 0).length;
-    weekSummaries.push({ week: weekStr, activeDays, summary });
+    weekSummaries.push({ week: weekStr, activeDays, summary, manifest: childManifest("week", weekStr, atSha) });
   }
 
   if (weekSummaries.length === 0) return `[recall: no data found for ${monthStr}]`;
 
   const context = weekSummaries.map(w =>
-    `--- ${w.week} (${w.activeDays} active days) ---\n${w.summary}`
+    `--- ${w.week} (${w.activeDays} active days) ---\nPROVENANCE_MANIFEST ${formatManifestForPrompt(w.manifest as CacheProvenanceManifest)}\n${w.summary}`
   ).join("\n\n");
 
   const systemPrompt = `You are a recall agent for ${monthStr}. Your context is week-level summaries for each week that had activity.
+
+${PROVENANCE_SYNTHESIS_INSTRUCTIONS}
 
 You operate at month resolution — daily detail lives one level down in week summaries, session detail lives two levels down. Name specific weeks or days when referencing detail so the caller can drill deeper. If your context doesn't contain enough detail, say which week likely has the answer.`;
 
@@ -445,7 +558,7 @@ function monthHasData(monthStr: string) {
 
 async function recallQuarter(quarterStr: string, question: string, modelSpec: string | null, onChunk?: OnChunk, atSha?: string | null) {
   const months = quarterMonths(quarterStr);
-  const monthSummaries: Array<{ month: string; summary: string }> = [];
+  const monthSummaries: Array<{ month: string; summary: string; manifest: ReturnType<typeof childManifest> }> = [];
 
   for (const monthStr of months) {
     if (!monthHasData(monthStr)) continue;
@@ -463,21 +576,22 @@ async function recallQuarter(quarterStr: string, question: string, modelSpec: st
     } else {
       summary = await recallMonth(monthStr, "Write the narrative of this month. Identify the trajectory — what emerged, what shifted, what's building. Cover key decisions, what shipped, and the personal arc. Operate at month resolution — don't repeat weekly details, surface what's visible across weeks. Reference specific weeks so the reader can drill down.", modelSpec) as string;
       if (summary && !summary.startsWith("[recall:")) {
-        mkdirSync(join(CACHE_DIR, "months"), { recursive: true });
-        writeFileSync(cachePath, summary);
+        writeCacheWithProvenance("month", monthStr, summary);
       }
     }
 
-    monthSummaries.push({ month: monthStr, summary });
+    monthSummaries.push({ month: monthStr, summary, manifest: childManifest("month", monthStr, atSha) });
   }
 
   if (monthSummaries.length === 0) return `[recall: no data found for ${quarterStr}]`;
 
   const context = monthSummaries.map(m =>
-    `--- ${m.month} ---\n${m.summary}`
+    `--- ${m.month} ---\nPROVENANCE_MANIFEST ${formatManifestForPrompt(m.manifest as CacheProvenanceManifest)}\n${m.summary}`
   ).join("\n\n");
 
   const systemPrompt = `You are a recall agent for ${quarterStr}. Your context is month-level summaries for each month that had activity.
+
+${PROVENANCE_SYNTHESIS_INSTRUCTIONS}
 
 You operate at the highest temporal resolution available. Patterns, trajectories, and emergent themes visible here are invisible at lower levels. Month-level detail lives one level down, week and day detail two and three levels down. Name specific months, weeks, or days when referencing detail so the caller can drill deeper. If your context doesn't contain enough detail, say which month likely has the answer.`;
 
@@ -489,8 +603,7 @@ You operate at the highest temporal resolution available. Patterns, trajectories
 
   const cachePath = join(CACHE_DIR, "quarters", `${quarterStr}.md`);
   if (!existsSync(cachePath) && result && !result.startsWith("[recall:")) {
-    mkdirSync(join(CACHE_DIR, "quarters"), { recursive: true });
-    writeFileSync(cachePath, result as string);
+    writeCacheWithProvenance("quarter", quarterStr, result as string);
   }
 
   return result;
@@ -511,7 +624,7 @@ function quarterHasData(quarterStr: string) {
 
 async function recallYear(yearStr: string, question: string, modelSpec: string | null, onChunk?: OnChunk, atSha?: string | null) {
   const quarters = yearQuarters(yearStr);
-  const quarterSummaries: Array<{ quarter: string; summary: string }> = [];
+  const quarterSummaries: Array<{ quarter: string; summary: string; manifest: ReturnType<typeof childManifest> }> = [];
 
   for (const quarterStr of quarters) {
     if (!quarterHasData(quarterStr)) continue;
@@ -529,21 +642,22 @@ async function recallYear(yearStr: string, question: string, modelSpec: string |
     } else {
       summary = await recallQuarter(quarterStr, "Write a narrative of this quarter. What's the arc — what materialized that wasn't there at the start, what's building? Don't restate monthly details — just what's visible from this altitude. Reference specific months so the reader can drill down.", modelSpec) as string;
       if (summary && !summary.startsWith("[recall:")) {
-        mkdirSync(join(CACHE_DIR, "quarters"), { recursive: true });
-        writeFileSync(cachePath, summary);
+        writeCacheWithProvenance("quarter", quarterStr, summary);
       }
     }
 
-    quarterSummaries.push({ quarter: quarterStr, summary });
+    quarterSummaries.push({ quarter: quarterStr, summary, manifest: childManifest("quarter", quarterStr, atSha) });
   }
 
   if (quarterSummaries.length === 0) return `[recall: no data found for ${yearStr}]`;
 
   const context = quarterSummaries.map(q =>
-    `--- ${q.quarter} ---\n${q.summary}`
+    `--- ${q.quarter} ---\nPROVENANCE_MANIFEST ${formatManifestForPrompt(q.manifest as CacheProvenanceManifest)}\n${q.summary}`
   ).join("\n\n");
 
   const systemPrompt = `You are a recall agent for ${yearStr}. Your context is quarter-level summaries for each quarter that had activity.
+
+${PROVENANCE_SYNTHESIS_INSTRUCTIONS}
 
 You operate at the highest temporal resolution available — the full year. Arcs, transformations, and emergent themes visible here are invisible at any lower level. Quarter-level detail lives one level down, month and week detail two and three levels down.
 
@@ -559,8 +673,7 @@ Name specific quarters, months, or weeks when referencing detail so the caller c
 
   const cachePath = join(CACHE_DIR, "years", `${yearStr}.md`);
   if (!existsSync(cachePath) && result && !result.startsWith("[recall:")) {
-    mkdirSync(join(CACHE_DIR, "years"), { recursive: true });
-    writeFileSync(cachePath, result as string);
+    writeCacheWithProvenance("year", yearStr, result as string);
   }
 
   return result;

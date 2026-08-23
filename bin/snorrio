@@ -6,6 +6,7 @@
 //   snorrio sweep                    Find & generate missing episodes, cascade caches
 //   snorrio reprocess <range> [depth] Regenerate from scratch in range
 //   snorrio status                   Show daemon and system status
+//   snorrio migrate-provenance       Add metadata/manifests and recascade affected dates
 //   snorrio update                   Pull latest and restart daemon
 
 import { existsSync, statSync, writeFileSync, openSync, readSync, closeSync } from "fs";
@@ -31,7 +32,7 @@ const cmd = process.argv[2];
 function daemonPid() {
   if (IS_MACOS) {
     try {
-      const out = execSync("launchctl list io.snorrio.dmn 2>/dev/null", { encoding: "utf8" });
+      const out = execSync("launchctl list io.snorrio.dmn 2>/dev/null", { encoding: "utf8", timeout: 3000 });
       const pidMatch = out.match(/"PID"\s*=\s*(\d+)/);
       return pidMatch ? pidMatch[1] : null;
     } catch {
@@ -40,9 +41,9 @@ function daemonPid() {
   } else {
     // Linux: systemd user service
     try {
-      const active = execSync(`systemctl --user is-active ${SERVICE_NAME} 2>/dev/null`, { encoding: "utf8" }).trim();
+      const active = execSync(`systemctl --user is-active ${SERVICE_NAME} 2>/dev/null`, { encoding: "utf8", timeout: 3000 }).trim();
       if (active !== "active") return null;
-      const pid = execSync(`systemctl --user show -p MainPID --value ${SERVICE_NAME} 2>/dev/null`, { encoding: "utf8" }).trim();
+      const pid = execSync(`systemctl --user show -p MainPID --value ${SERVICE_NAME} 2>/dev/null`, { encoding: "utf8", timeout: 3000 }).trim();
       return pid && pid !== "0" ? pid : null;
     } catch {
       return null;
@@ -52,6 +53,41 @@ function daemonPid() {
 
 function daemonLoaded() {
   return daemonPid() !== null;
+}
+
+function daemonSupervisorStatus() {
+  try {
+    if (IS_MACOS) {
+      const uid = execFileSync("id", ["-u"], { encoding: "utf8", timeout: 2000 }).trim();
+      execFileSync("launchctl", ["print", `gui/${uid}/io.snorrio.dmn`], { stdio: "pipe", timeout: 3000 });
+      return "launchd registered";
+    }
+    const enabled = execFileSync("systemctl", ["--user", "is-enabled", SERVICE_NAME], { encoding: "utf8", timeout: 3000 }).trim();
+    return enabled === "enabled" ? "systemd enabled" : `systemd ${enabled}`;
+  } catch {
+    return "not registered/unknown";
+  }
+}
+
+function herdrSupervisorStatus() {
+  try {
+    if (IS_MACOS) {
+      const raw = execFileSync("brew", ["services", "info", "herdr", "--json"], { encoding: "utf8", timeout: 5000 });
+      const service = JSON.parse(raw)?.[0];
+      if (service?.running === true) return "Homebrew service running";
+      if (service?.registered || service?.loaded || service?.schedulable) {
+        return "Homebrew service registered but not running";
+      }
+      return "Homebrew service not registered";
+    }
+    for (const name of ["herdr.service", "herdr-server.service"]) {
+      try {
+        const enabled = execFileSync("systemctl", ["--user", "is-enabled", name], { encoding: "utf8", timeout: 3000 }).trim();
+        if (enabled === "enabled") return `${name} enabled`;
+      } catch {}
+    }
+  } catch {}
+  return "not registered/unknown";
 }
 
 async function restartDaemon() {
@@ -92,6 +128,7 @@ Commands:
   sweep                         Find & generate missing episodes, cascade caches
   reprocess <range> [depth]     Regenerate from scratch in range
   status                        Show daemon and system status
+  migrate-provenance [--dry-run] Add episode lineage metadata, cache manifests, and recascade affected dates
   update                        Pull latest and restart daemon
 
 Reprocess ranges: YYYY-MM-DD | YYYY-Www | YYYY-MM | YYYY-QN | YYYY
@@ -209,27 +246,38 @@ if (cmd === "flush") {
     process.exit(1);
   }
 
+} else if (cmd === "migrate-provenance") {
+  const args = [join(PKG_ROOT, "src/episode-daemon.ts"), "--migrate-provenance"];
+  if (process.argv.includes("--dry-run")) args.push("--dry-run");
+  try {
+    execFileSync("node", args, { stdio: "inherit", env: { ...process.env, SNORRIO_HOME } });
+  } catch {
+    process.exit(1);
+  }
+
 } else if (cmd === "status") {
   // Daemon
   const pid = daemonPid();
-  console.log(`Daemon:    ${pid ? `running (PID ${pid})` : "not running"}`);
+  console.log(`Daemon:    ${pid ? `live (PID ${pid})` : "not live"}`);
+  console.log(`Daemon supervisor: ${daemonSupervisorStatus()}`);
 
   // Harness. Snorrio and herdr ship together, so a status line that covers only
   // the memory half hides half the system.
   let herdrLine = "not installed";
   try {
-    execSync("which herdr", { stdio: "pipe" });
+    execFileSync("which", ["herdr"], { stdio: "pipe", timeout: 2000 });
     try {
-      const out = execSync("herdr status server 2>/dev/null", { encoding: "utf8", timeout: 5000 });
+      const out = execFileSync("herdr", ["status", "server"], { encoding: "utf8", timeout: 5000 });
       const version = out.match(/^version:\s*(\S+)/m)?.[1];
       herdrLine = /status:\s*running/.test(out)
-        ? `server running${version ? ` (${version})` : ""}`
+        ? `server live${version ? ` (${version})` : ""}`
         : "installed, server not answering";
     } catch {
       herdrLine = "installed, server not answering";
     }
   } catch {}
   console.log(`Harness:   ${herdrLine}`);
+  console.log(`Harness supervisor: ${herdrSupervisorStatus()}`);
 
   // Data home
   console.log(`Data home: ${SNORRIO_HOME}`);
@@ -255,8 +303,8 @@ if (cmd === "flush") {
 
   // Git status
   try {
-    const branch = execSync("git rev-parse --abbrev-ref HEAD", { cwd: PKG_ROOT, encoding: "utf8" }).trim();
-    const hash = execSync("git rev-parse --short HEAD", { cwd: PKG_ROOT, encoding: "utf8" }).trim();
+    const branch = execSync("git rev-parse --abbrev-ref HEAD", { cwd: PKG_ROOT, encoding: "utf8", timeout: 3000 }).trim();
+    const hash = execSync("git rev-parse --short HEAD", { cwd: PKG_ROOT, encoding: "utf8", timeout: 3000 }).trim();
     console.log(`Version:   ${branch}@${hash}`);
   } catch {}
 

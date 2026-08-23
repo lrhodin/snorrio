@@ -34,8 +34,7 @@ import {
   readdirSync, unlinkSync, appendFileSync,
 } from "fs";
 import { join, basename } from "path";
-import { hostname as osHostname } from "os";
-import { complete, getText, userMessage, SNORRIO_HOME, piRoot, getTimezone, CONFIG_PATH, type Message } from "./ai.ts";
+import { complete, getText, userMessage, SNORRIO_HOME, piRoot, getTimezone, CONFIG_PATH } from "./ai.ts";
 import { sessionMessagesToLlm, type RawSessionMessage } from "./model-independence.ts";
 import { atomicWriteFile as atomicWrite } from "./atomic-write.ts";
 import { ensureDataRepo, commitDataRepo } from "./data-repo.ts";
@@ -43,10 +42,15 @@ import { recall } from "./recall-engine.ts";
 import { decideCascade, dateToWeek, monthToQuarter, type CascadeLevel } from "./cascade-decision.ts";
 import { findStaleSessions } from "./stale-sessions.ts";
 import {
-  sessionIdFromPath, sessionIdFromEntries,
+  sessionIdFromEntries,
   sessionTimestamps as metaTimestamps,
   allSessions as metaAllSessions, type SessionInfo,
 } from "./session-meta.ts";
+import { getSessionLineageIndex, type SessionLineage, type SessionLineageIndex } from "./session-lineage.ts";
+import { buildEpisodeFrontmatter, defaultMachine } from "./episode-frontmatter.ts";
+import { cacheManifestNeedsRefresh, writeCacheWithProvenance, type CacheLevel } from "./cache-provenance.ts";
+import { migrateProvenanceMetadata, planProvenanceRecascade, writeProvenanceRecascadeMarker } from "./provenance-migration.ts";
+import { externalLineageSessionCandidates, lineageSessionCandidates } from "./session-candidates.ts";
 
 // Side-channel flag used to suppress the cascading temporal-cache rebuild during
 // batch operations (--reprocess, midnight sweeps). Read in five places below;
@@ -99,13 +103,40 @@ function getMachine() {
     const cfg = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
     if (cfg.machine) return cfg.machine;
   } catch {}
-  return osHostname().replace(/\.local$/, "").toLowerCase();
+  return defaultMachine();
 }
 const MACHINE = getMachine();
+let activeLineageIndex: SessionLineageIndex | null = null;
 
-function buildFrontmatter(origin: string, sourcePath: string, timestamp: string) {
-  const source = sourcePath.startsWith(HOME) ? "~" + sourcePath.slice(HOME.length) : sourcePath;
-  return `---\norigin: ${origin}\nmachine: ${MACHINE}\nsource: ${source}\ntimestamp: ${timestamp}\n---\n\n`;
+function lineageForSession(sourcePath: string, sessionId: string): SessionLineage {
+  const indexed = (activeLineageIndex ?? getSessionLineageIndex()).getByPath(sourcePath);
+  if (indexed) return indexed;
+  // A just-created session can race the directory walk. Preserve a complete,
+  // directly recallable standalone identity rather than omitting provenance.
+  return {
+    sessionId,
+    sessionPath: sourcePath,
+    parentSessionId: null,
+    rootSessionId: sessionId,
+    provenanceFamilyId: sessionId,
+    lineageDepth: 0,
+    lineageSource: "none",
+    lineageComplete: true,
+    lineageConflict: false,
+    dependencySessionIds: [],
+    issues: [],
+  };
+}
+
+function buildFrontmatter(origin: string, sourcePath: string, timestamp: string, sessionId: string) {
+  return buildEpisodeFrontmatter({
+    origin,
+    machine: MACHINE,
+    sourcePath,
+    home: HOME,
+    timestamp,
+    lineage: lineageForSession(sourcePath, sessionId),
+  });
 }
 
 const timers = new Map();
@@ -202,7 +233,7 @@ async function generateEpisode(filePath: string) {
   if (!text?.trim()) { log(`  Empty output: ${id.slice(0, 8)}`); return null; }
 
   const timestamp = end || start || new Date().toISOString();
-  const fm = buildFrontmatter("pi", filePath, timestamp);
+  const fm = buildFrontmatter("pi", filePath, timestamp, id);
   const dir = join(EPISODES_DIR, dateStr);
   mkdirSync(dir, { recursive: true });
   const epPath = join(dir, `${id}.md`);
@@ -228,11 +259,12 @@ async function generateEpisode(filePath: string) {
 // TEMPORAL HELPERS
 // ============================================================================
 
-const CACHE_Q_DAY = "Tell the story of today — write it as a narrative, not a checklist. What was worked on, what got decided, what changed. Track commitments made for today, but don't carry weekly or longer-term goals — just mention them naturally so higher levels can pick them up. Include session IDs so any thread can be traced back to its source.";
-const CACHE_Q_WEEK = "Write a narrative of this week so far — an essay, not a checklist. What threads are developing, what started or stalled, what's the trajectory? Don't repeat daily details — just what's visible across multiple days. You're the continuity layer across day boundaries — anything in flight that a new day needs to pick up should be here, with enough detail to find the right day. Reference specific dates so the reader can navigate down.";
-const CACHE_Q_MONTH = "Write a narrative of this month so far — an essay, not a checklist. What shifted, what themes emerged or faded, what's shaping the direction? Don't restate weekly details — just what's visible at the monthly level. You're the continuity layer across week boundaries — any active threads a new week needs to carry forward should be here, with enough context to find the right week. Reference specific weeks so the reader can navigate down.";
-const CACHE_Q_QUARTER = "Write a narrative of this quarter so far — an essay, not a checklist. What's the arc, what materialized that wasn't there at the start, what's building? Don't restate monthly details — just what's visible from this altitude. You're the continuity layer across month boundaries — any arcs a new month needs to carry forward should be here, with enough context to find the right month. Reference specific months so the reader can navigate down.";
-const CACHE_Q_YEAR = "Write a narrative of this year so far. Every thread surfaced at the quarter level should be carried here — not restated in full, but faithfully represented at a higher level of abstraction so any of them can be drilled into. No thread should disappear between quarters and the year.\n\nGround every claim in what the quarter summaries actually say. If a quarter doesn't state an outcome, don't infer one. Say what's known and what's unresolved — never fabricate a status.\n\nWhat's the through-line? What transformed? What emerged that wasn't imaginable at the start? What's visible from this altitude that no single quarter can see? Surface cross-quarter arcs and tensions, but stay anchored to what actually happened. Reference specific quarters so the reader can navigate down.";
+const PROVENANCE_CACHE_RULE = " Treat each provenance_family_id as ONE evidence source, including when the same family spans dates. Preserve exact provenance_family_id values and session IDs in the synthesis. Parent restatements and child results in one family are not independent corroboration; incomplete lineage must remain labeled incomplete.";
+const CACHE_Q_DAY = "Tell the story of today — write it as a narrative, not a checklist. What was worked on, what got decided, what changed. Track commitments made for today, but don't carry weekly or longer-term goals — just mention them naturally so higher levels can pick them up. Include session IDs so any thread can be traced back to its source." + PROVENANCE_CACHE_RULE;
+const CACHE_Q_WEEK = "Write a narrative of this week so far — an essay, not a checklist. What threads are developing, what started or stalled, what's the trajectory? Don't repeat daily details — just what's visible across multiple days. You're the continuity layer across day boundaries — anything in flight that a new day needs to pick up should be here, with enough detail to find the right day. Reference specific dates so the reader can navigate down." + PROVENANCE_CACHE_RULE;
+const CACHE_Q_MONTH = "Write a narrative of this month so far — an essay, not a checklist. What shifted, what themes emerged or faded, what's shaping the direction? Don't restate weekly details — just what's visible at the monthly level. You're the continuity layer across week boundaries — any active threads a new week needs to carry forward should be here, with enough context to find the right week. Reference specific weeks so the reader can navigate down." + PROVENANCE_CACHE_RULE;
+const CACHE_Q_QUARTER = "Write a narrative of this quarter so far — an essay, not a checklist. What's the arc, what materialized that wasn't there at the start, what's building? Don't restate monthly details — just what's visible from this altitude. You're the continuity layer across month boundaries — any arcs a new month needs to carry forward should be here, with enough context to find the right month. Reference specific months so the reader can navigate down." + PROVENANCE_CACHE_RULE;
+const CACHE_Q_YEAR = "Write a narrative of this year so far. Every thread surfaced at the quarter level should be carried here — not restated in full, but faithfully represented at a higher level of abstraction so any of them can be drilled into. No thread should disappear between quarters and the year.\n\nGround every claim in what the quarter summaries actually say. If a quarter doesn't state an outcome, don't infer one. Say what's known and what's unresolved — never fabricate a status.\n\nWhat's the through-line? What transformed? What emerged that wasn't imaginable at the start? What's visible from this altitude that no single quarter can see? Surface cross-quarter arcs and tensions, but stay anchored to what actually happened. Reference specific quarters so the reader can navigate down." + PROVENANCE_CACHE_RULE;
 
 async function cascadeForDate(dateStr: string) {
   // Only called in live mode (debounce path) — _skipCascade gates this.
@@ -244,14 +276,10 @@ async function cascadeForDate(dateStr: string) {
 
 // Rebuild caches for a set of refs at one level.
 // Parallel for day/week/month, sequential for quarter/year.
-async function rebuildCache(level: string, refs: string[], prefix: string = "") {
+async function rebuildCache(level: CacheLevel, refs: string[], prefix: string = "", strict: boolean = false) {
   const prompts: Record<string, string> = {
     day: CACHE_Q_DAY, week: CACHE_Q_WEEK, month: CACHE_Q_MONTH,
     quarter: CACHE_Q_QUARTER, year: CACHE_Q_YEAR,
-  };
-  const dirs: Record<string, string> = {
-    day: "days", week: "weeks", month: "months",
-    quarter: "quarters", year: "years",
   };
   if (refs.length === 0) return;
   log(`${prefix}  Rebuilding ${refs.length} ${level} cache${refs.length > 1 ? "s" : ""}`);
@@ -259,10 +287,18 @@ async function rebuildCache(level: string, refs: string[], prefix: string = "") 
   const rebuild = async (ref: string) => {
     try {
       const summary = await recall(ref, prompts[level], null);
-      if (summary && !summary.startsWith("[recall:"))
-        atomicWrite(join(CACHE_DIR, dirs[level], `${ref}.md`), summary as string);
-      log(`${prefix}    ${ref} ✓`);
-    } catch (err: any) { log(`${prefix}    ${ref} ✗ ${err.message?.slice(0, 100)}`); }
+      if (summary && !summary.startsWith("[recall:")) {
+        writeCacheWithProvenance(level, ref, summary as string, { lineageIndex: activeLineageIndex ?? undefined });
+        log(`${prefix}    ${ref} ✓`);
+      } else {
+        const message = `cache rebuild returned no usable summary for ${level} ${ref}`;
+        log(`${prefix}    ${ref} ✗ ${message}`);
+        if (strict) throw new Error(message);
+      }
+    } catch (err: any) {
+      log(`${prefix}    ${ref} ✗ ${err.message?.slice(0, 100)}`);
+      if (strict) throw err;
+    }
   };
 
   if (["day", "week", "month"].includes(level)) await Promise.all(refs.map(rebuild));
@@ -302,7 +338,7 @@ async function validateCaches(prefix: string = "") {
         latestEpisodeMtime = Math.max(latestEpisodeMtime, mtime(join(EPISODES_DIR, day, f)));
       }
     } catch {}
-    if (!dayCacheMtime || latestEpisodeMtime > dayCacheMtime) staleDays.push(day);
+    if (!dayCacheMtime || latestEpisodeMtime > dayCacheMtime || cacheManifestNeedsRefresh("day", day, latestEpisodeMtime, { lineageIndex: activeLineageIndex ?? undefined })) staleDays.push(day);
   }
   if (staleDays.length) await rebuildCache("day", [...new Set(staleDays)].sort(), prefix);
 
@@ -316,7 +352,8 @@ async function validateCaches(prefix: string = "") {
   const staleWeeks: string[] = [];
   for (const [week, days] of weekDays) {
     const wt = mtime(cachePath("week", week));
-    if (days.some(d => mtime(cachePath("day", d)) > wt)) staleWeeks.push(week);
+    const newest = Math.max(...days.map(d => mtime(cachePath("day", d))));
+    if (newest > wt || cacheManifestNeedsRefresh("week", week, newest, { lineageIndex: activeLineageIndex ?? undefined })) staleWeeks.push(week);
   }
   if (staleWeeks.length) await rebuildCache("week", staleWeeks.sort(), prefix);
 
@@ -337,7 +374,8 @@ async function validateCaches(prefix: string = "") {
   const staleMonths: string[] = [];
   for (const [month, weeks] of monthWeeks) {
     const mt = mtime(cachePath("month", month));
-    if (weeks.some(w => mtime(cachePath("week", w)) > mt)) staleMonths.push(month);
+    const newest = Math.max(...weeks.map(w => mtime(cachePath("week", w))));
+    if (newest > mt || cacheManifestNeedsRefresh("month", month, newest, { lineageIndex: activeLineageIndex ?? undefined })) staleMonths.push(month);
   }
   if (staleMonths.length) await rebuildCache("month", staleMonths.sort(), prefix);
 
@@ -352,7 +390,8 @@ async function validateCaches(prefix: string = "") {
   const staleQuarters: string[] = [];
   for (const [quarter, months] of quarterMonths) {
     const qt = mtime(cachePath("quarter", quarter));
-    if (months.some(m => mtime(cachePath("month", m)) > qt)) staleQuarters.push(quarter);
+    const newest = Math.max(...months.map(m => mtime(cachePath("month", m))));
+    if (newest > qt || cacheManifestNeedsRefresh("quarter", quarter, newest, { lineageIndex: activeLineageIndex ?? undefined })) staleQuarters.push(quarter);
   }
   if (staleQuarters.length) {
     for (const q of staleQuarters.sort()) await rebuildCache("quarter", [q], prefix);
@@ -369,7 +408,8 @@ async function validateCaches(prefix: string = "") {
   const staleYears: string[] = [];
   for (const [year, quarters] of yearQuartersMap) {
     const yt = mtime(cachePath("year", year));
-    if (quarters.some(q => mtime(cachePath("quarter", q)) > yt)) staleYears.push(year);
+    const newest = Math.max(...quarters.map(q => mtime(cachePath("quarter", q))));
+    if (newest > yt || cacheManifestNeedsRefresh("year", year, newest, { lineageIndex: activeLineageIndex ?? undefined })) staleYears.push(year);
   }
   if (staleYears.length) {
     for (const y of staleYears.sort()) await rebuildCache("year", [y], prefix);
@@ -379,11 +419,11 @@ async function validateCaches(prefix: string = "") {
 // Derive unique refs at each level from a set of dates, rebuild bottom-up.
 // `from` controls the starting level: "day" | "week" | "month" | "quarter" | "year".
 // Pure decision lives in cascade-decision.ts; this wrapper does the IO.
-async function batchCascade(dates: Set<string>, from: string = "day", prefix: string = "") {
+async function batchCascade(dates: Set<string>, from: string = "day", prefix: string = "", strict: boolean = false) {
   const decision = decideCascade(dates, from as CascadeLevel);
   for (const level of ["day", "week", "month", "quarter", "year"] as CascadeLevel[]) {
     const refs = decision[level];
-    if (refs.length) await rebuildCache(level, refs, prefix);
+    if (refs.length) await rebuildCache(level, refs, prefix, strict);
   }
 }
 
@@ -419,6 +459,26 @@ function startWatcher() {
   });
 }
 
+// Project-local Herdr children may live outside the global watched tree. Parent
+// dependency records make them discoverable; this bounded reconciliation gives
+// them the same episode pipeline without attempting unsafe dynamic fs.watch
+// expansion. Flush/sweep also include them immediately.
+function startExternalSessionReconciliation() {
+  const reconcile = () => {
+    try {
+      const index = getSessionLineageIndex(metaAllSessions());
+      const external = externalLineageSessionCandidates(index, PI_SESSIONS_DIR);
+      const { stale } = findStaleSessions(external, EPISODES_DIR, dateOfSession);
+      for (const session of stale.slice(0, 32)) onSessionChange(session.path);
+      if (stale.length > 32) log(`External reconciliation bounded: scheduled 32/${stale.length}`);
+    } catch (err: any) {
+      log(`External reconciliation failed: ${err.message?.slice(0, 120)}`);
+    }
+  };
+  setTimeout(reconcile, 30_000);
+  setInterval(reconcile, 10 * 60_000);
+}
+
 // ============================================================================
 // SWEEP / REPROCESS
 // ============================================================================
@@ -426,7 +486,9 @@ function startWatcher() {
 async function sweep() {
   log("Sweep starting...");
   globalThis._skipCascade = true;
-  const sessions = metaAllSessions();
+  const index = getSessionLineageIndex(metaAllSessions());
+  activeLineageIndex = index;
+  const sessions = lineageSessionCandidates(index);
   let ok = 0, exists = 0, fail = 0;
   const CONCURRENCY = parseInt(process.env.REPROCESS_CONCURRENCY || "8");
   const touchedDays = new Set<string>();
@@ -466,6 +528,7 @@ async function sweep() {
   commitDataRepo({
     message: `sweep ${new Date().toISOString().slice(0, 10)}: ${ok} episodes, ${touchedDays.size} days touched`,
   });
+  activeLineageIndex = null;
   log(`Sweep done: ${ok} episodes, ${touchedDays.size} days touched`);
 }
 
@@ -549,7 +612,7 @@ function dateOfSession(s: SessionInfo): string {
 
 function sessionsForDays(days: string[]) {
   const daySet = new Set(days);
-  const sessions = metaAllSessions();
+  const sessions = lineageSessionCandidates(activeLineageIndex ?? getSessionLineageIndex(metaAllSessions()));
   const matched: SessionInfo[] = [];
   for (const s of sessions) {
     if (daySet.has(dateOfSession(s))) matched.push(s);
@@ -572,6 +635,7 @@ async function reprocess(rangeStr: string, depthStr?: string) {
   }
 
   log(`Reprocess: ${range.ref} (${range.type}) from ${depth} level`);
+  activeLineageIndex = getSessionLineageIndex(metaAllSessions());
 
   const days = rangeToDays(range);
   const activeDays = days.filter(d => existsSync(join(EPISODES_DIR, d)));
@@ -614,7 +678,7 @@ async function reprocess(rangeStr: string, depthStr?: string) {
           fail++; return;
         }
 
-        const fm = buildFrontmatter("pi", s.path, end || start || new Date().toISOString());
+        const fm = buildFrontmatter("pi", s.path, end || start || new Date().toISOString(), s.id);
         const dir = join(EPISODES_DIR, dateStr);
         mkdirSync(dir, { recursive: true });
         const epPath = join(dir, `${s.id}.md`);
@@ -669,6 +733,7 @@ async function reprocess(rangeStr: string, depthStr?: string) {
   // Version the reprocess batch. No single triggering session → author date = now.
   commitDataRepo({ message: `reprocess ${range.ref} from ${depth}` });
 
+  activeLineageIndex = null;
   log("Reprocess complete.");
 }
 
@@ -683,6 +748,7 @@ function startFlushWatcher() {
     if (!existsSync(FLUSH_TRIGGER)) return;
     try { unlinkSync(FLUSH_TRIGGER); } catch { return; }
     log("Flush triggered");
+    activeLineageIndex = getSessionLineageIndex(metaAllSessions());
     const pendingPaths = new Set<string>();
     for (const [filePath, timer] of timers.entries()) {
       clearTimeout(timer);
@@ -694,12 +760,12 @@ function startFlushWatcher() {
     // map lies. The filesystem is the source of truth — "all sessions up to
     // date" must be true by construction. (2026-06-09 VM onboarding finding #2)
     try {
-      const { stale } = findStaleSessions(metaAllSessions(), EPISODES_DIR, dateOfSession);
+      const { stale } = findStaleSessions(lineageSessionCandidates(activeLineageIndex), EPISODES_DIR, dateOfSession);
       for (const s of stale) pendingPaths.add(s.path);
     } catch (err: any) {
       log(`Flush: disk reconciliation failed (${err.message?.slice(0, 100)}); proceeding with watcher-pending only`);
     }
-    if (pendingPaths.size === 0) { log("Flush: 0 sessions to process"); return; }
+    if (pendingPaths.size === 0) { activeLineageIndex = null; log("Flush: 0 sessions to process"); return; }
     log(`Flush: ${pendingPaths.size} pending`);
 
     // Phase 1: Generate episodes (skip cascade — we'll do it ourselves)
@@ -728,7 +794,7 @@ function startFlushWatcher() {
         log(`  Regenerating day cache: ${dateStr}`);
         const daySummary = await recall(dateStr, CACHE_Q_DAY, null);
         if (daySummary && !daySummary.startsWith("[recall:")) {
-          atomicWrite(join(CACHE_DIR, "days", `${dateStr}.md`), daySummary as string);
+          writeCacheWithProvenance("day", dateStr, daySummary as string, { lineageIndex: activeLineageIndex ?? undefined });
         }
       } catch (err: any) { log(`  Day cache error: ${err.message?.slice(0, 100)}`); }
     }
@@ -746,6 +812,7 @@ function startFlushWatcher() {
         message: `cascade flush ${[...dates].sort().join(",")}: ${processed} episode${processed === 1 ? "" : "s"} → day/week/month/quarter/year`,
         authorDate: latestTs ?? undefined,
       });
+      activeLineageIndex = null;
       log("  [bg] Background cascade complete");
     })().catch(err => log(`Background cascade error: ${err.message}`));
   }, 1000);
@@ -764,47 +831,41 @@ function scheduleSweep() {
 }
 
 // ============================================================================
-// FRONTMATTER MIGRATION
+// PROVENANCE MIGRATION
 // ============================================================================
 
-async function addFrontmatter() {
-  log("Building session index...");
-  const sessionIndex = new Map<string, { path: string; start: string | null; end: string | null }>();
-  const sessions = metaAllSessions();
-  for (const s of sessions) {
-    const { start, end } = metaTimestamps(s.path);
-    sessionIndex.set(s.id, { path: s.path, start, end });
-  }
-  log(`  ${sessionIndex.size} sessions indexed`);
-
-  let updated = 0, skipped = 0, notFound = 0;
-  const episodeDirs = readdirSync(EPISODES_DIR).filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort();
-
-  for (const dateDir of episodeDirs) {
-    const dir = join(EPISODES_DIR, dateDir);
-    const episodes = readdirSync(dir).filter(f => f.endsWith(".md"));
-
-    for (const epFile of episodes) {
-      const epPath = join(dir, epFile);
-      const content = readFileSync(epPath, "utf8");
-
-      if (content.startsWith("---\n")) { skipped++; continue; }
-
-      const sessionUuid = epFile.replace(".md", "");
-      const session = sessionIndex.get(sessionUuid);
-
-      const sourcePath = session?.path || "unknown";
-      const ts = session ? (session.end || session.start || `${dateDir}T00:00:00Z`) : `${dateDir}T00:00:00Z`;
-      if (!session) notFound++;
-
-      const origin = "pi";
-      const fm = buildFrontmatter(origin, sourcePath, ts);
-      atomicWrite(epPath, fm + content);
-      updated++;
+async function migrateProvenanceCommand(dryRun: boolean) {
+  if (dryRun) process.env.SNORRIO_LINEAGE_CACHE_READONLY = "1";
+  log(`Provenance migration ${dryRun ? "dry-run" : "starting"}...`);
+  const index = getSessionLineageIndex(metaAllSessions());
+  activeLineageIndex = index;
+  const result = migrateProvenanceMetadata({
+    episodesDir: EPISODES_DIR,
+    cacheDir: CACHE_DIR,
+    lineageIndex: index,
+    home: HOME,
+    machine: MACHINE,
+    dryRun,
+  });
+  const recascade = planProvenanceRecascade(result, { cacheDir: CACHE_DIR, episodesDir: EPISODES_DIR, lineageIndex: index });
+  if (!dryRun) {
+    if (recascade.dates.length > 0) {
+      await batchCascade(new Set(recascade.dates), "day", "[migration]", true);
     }
+    // Record signatures only after every requested cascade succeeds. A second
+    // run can then prove that no recovered family changed and make zero LLM
+    // calls. Do not overwrite this marker with a differently shaped report.
+    writeProvenanceRecascadeMarker(CACHE_DIR, recascade.signatures);
   }
+  log(`  Episodes: ${result.episodesScanned} scanned, ${result.episodesChanged} metadata changes, ${result.episodesUnknown} unknown`);
+  log(`  Cache manifests: ${result.manifestsWritten}${dryRun ? " would be written" : " written"}`);
+  log(`  Duplicate-evidence dates: ${result.affectedDates.length}; ${recascade.dates.length} require recascade`);
 
-  log(`Frontmatter migration: ${updated} updated, ${skipped} already had, ${notFound} session not found`);
+  if (!dryRun) {
+    commitDataRepo({ message: `migrate provenance: ${result.episodesChanged} episodes, ${result.manifestsWritten} manifests, ${recascade.dates.length} dates recascaded` });
+  }
+  activeLineageIndex = null;
+  return result;
 }
 
 // ============================================================================
@@ -812,7 +873,10 @@ async function addFrontmatter() {
 // ============================================================================
 
 async function main() {
-  if (process.argv.includes("--add-frontmatter")) { await addFrontmatter(); process.exit(0); }
+  if (process.argv.includes("--migrate-provenance") || process.argv.includes("--add-frontmatter")) {
+    await migrateProvenanceCommand(process.argv.includes("--dry-run"));
+    process.exit(0);
+  }
   if (process.argv.includes("--sweep")) { await sweep(); process.exit(0); }
   const rpIdx = process.argv.indexOf("--reprocess");
   if (rpIdx !== -1) {
@@ -834,6 +898,7 @@ async function main() {
     ? `Data repo ready: ${repo.root}`
     : "Data repo versioning DISABLED (git unavailable or init failed) — memory continues unversioned");
   startWatcher();
+  startExternalSessionReconciliation();
   startFlushWatcher();
   scheduleSweep();
   log("Ready");

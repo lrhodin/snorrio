@@ -38,6 +38,7 @@ const DAY = "2026-03-05";
 const WEEK = "2026-W10";
 const MONTH = "2026-03";
 const QUARTER = "2026-Q1";
+const YEAR = "2026";
 
 function writeEpisode(date: string, sessionId: string) {
   const dir = join(TMP, "snorrio", "episodes", date);
@@ -86,7 +87,7 @@ test("sub-summary cache writes are guarded against error sentinels", async (t) =
       content: [],
     }));
 
-    const result = await recall(QUARTER, "what happened?", null);
+    const result = await recall(YEAR, "what happened?", null);
 
     // The recall itself surfaces the error sentinel...
     assert.equal(typeof result, "string");
@@ -100,14 +101,19 @@ test("sub-summary cache writes are guarded against error sentinels", async (t) =
   });
 
   // --- Clean result: the success path is unchanged ----------------------
-  await t.test("a clean summary result IS persisted at day/week/month", async () => {
-    // Each tier produces distinct text; getText() joins the text blocks.
-    setCompleteForTest(async () => ({
-      stopReason: "end",
-      content: [{ type: "text", text: "CLEAN SUMMARY" }],
-    }));
+  await t.test("a clean summary result writes manifests and injects them even when summaries omit IDs", async () => {
+    const seenPrompts: string[] = [];
+    // The LLM deliberately omits every provenance ID. Production recall must
+    // still pass machine-readable child manifests to the next tier.
+    setCompleteForTest(async (messages: any[]) => {
+      seenPrompts.push(JSON.stringify(messages));
+      return {
+        stopReason: "end",
+        content: [{ type: "text", text: "CLEAN SUMMARY WITHOUT IDS" }],
+      };
+    });
 
-    const result = await recall(QUARTER, "what happened?", null);
+    const result = await recall(YEAR, "what happened?", null);
     assert.ok(!(result as string).startsWith("[recall:"), `expected clean result, got: ${result}`);
 
     assert.ok(existsSync(dayCache()), "day cache should be written for a clean result");
@@ -118,7 +124,24 @@ test("sub-summary cache writes are guarded against error sentinels", async (t) =
     for (const p of [dayCache(), weekCache(), monthCache()]) {
       const cached = readFileSync(p, "utf8");
       assert.ok(!cached.startsWith("[recall:"), `cache at ${p} holds a sentinel: ${cached}`);
+      assert.ok(existsSync(p.replace(/\.md$/, ".provenance.json")), `manifest missing beside ${p}`);
     }
+    const productionContexts = seenPrompts.filter(prompt => prompt.includes("PROVENANCE_MANIFEST"));
+    assert.ok(productionContexts.length >= 4, "week/month/quarter/year production contexts should inject manifests");
+    for (const level of ["day", "week", "month", "quarter"]) {
+      assert.ok(
+        productionContexts.some(prompt => prompt.includes(`\\\"level\\\":\\\"${level}\\\"`) && prompt.includes("sess-a")),
+        `${level} child manifest must carry the session id omitted by summary prose`,
+      );
+    }
+
+    seenPrompts.length = 0;
+    const year = await recall("2026", "what happened this year?", null);
+    assert.ok(!(year as string).startsWith("[recall:"));
+    assert.ok(
+      seenPrompts.some(prompt => prompt.includes("PROVENANCE_MANIFEST") && prompt.includes("quarter") && prompt.includes("sess-a")),
+      "year production context must inject the quarter manifest",
+    );
   });
 
   setCompleteForTest(null); // restore real boundary

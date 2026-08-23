@@ -23,6 +23,9 @@ let loadEpisodes: (date: string) => Array<{ sessionId: string; sortKey: string; 
 let weekDates: (week: string) => string[];
 let weekHasData: (week: string) => boolean;
 let monthHasData: (month: string) => boolean;
+let groupEpisodesByProvenance: (episodes: any[]) => Array<{ provenanceFamilyId: string; episodes: any[] }>;
+let formatDayEvidenceContext: (episodes: any[]) => string;
+let provenanceInstructions: string;
 
 const SAVED_ENV = { HOME: process.env.HOME, SNORRIO_HOME: process.env.SNORRIO_HOME };
 
@@ -62,6 +65,9 @@ test("recall-engine retrieval invariants", async (t) => {
   weekDates = mod.weekDates;
   weekHasData = mod.weekHasData;
   monthHasData = mod.monthHasData;
+  groupEpisodesByProvenance = mod.groupEpisodesByProvenance;
+  formatDayEvidenceContext = mod.formatDayEvidenceContext;
+  provenanceInstructions = mod.PROVENANCE_SYNTHESIS_INSTRUCTIONS;
 
   // --- Fixture corpus ---------------------------------------------------
   // Day A: three episodes with explicit headers, deliberately written in
@@ -178,6 +184,90 @@ test("recall-engine retrieval invariants", async (t) => {
   });
 
   // --- Invariant 5: weekHasData / monthHasData integrate retrieval ----
+  await t.test("provenance grouping preserves child content/order and keeps unrelated families separate", () => {
+    const P = "2026-03-11";
+    const dir = join(TMP, "snorrio", "episodes", P);
+    mkdirSync(dir, { recursive: true });
+    const fm = (sessionId: string, familyId: string, body: string) => [
+      "---",
+      `session_id: \"${sessionId}\"`,
+      `root_session_id: \"${familyId}\"`,
+      `provenance_family_id: \"${familyId}\"`,
+      "lineage_complete: true",
+      "---",
+      "",
+      body,
+    ].join("\n");
+    writeFileSync(join(dir, "parent.md"), fm("parent", "family-root", `${header("parent", P, "09:00")}\nparent body`));
+    writeFileSync(join(dir, "child.md"), fm("child", "family-root", `${header("child", P, "10:00")}\nchild body`));
+    writeFileSync(join(dir, "independent.md"), fm("independent", "independent", `${header("independent", P, "11:00")}\nindependent body`));
+
+    const episodes = loadEpisodes(P) as any[];
+    const families = groupEpisodesByProvenance(episodes);
+    assert.deepEqual(families.map(f => f.provenanceFamilyId), ["family-root", "independent"]);
+    assert.deepEqual(families[0].episodes.map(ep => ep.sessionId), ["parent", "child"]);
+
+    const context = formatDayEvidenceContext(episodes);
+    assert.match(context, /provenance family family-root/);
+    assert.match(context, /ONE evidence source; 2 sessions: parent, child/);
+    assert.match(context, /parent body/);
+    assert.match(context, /child body/);
+    assert.match(context, /provenance family independent/);
+  });
+
+  await t.test("legacy episodes consult live dependency lineage; unrecoverable legacy remains incomplete", () => {
+    const L = "2026-03-13";
+    const sessionDir = join(TMP, ".pi/agent/sessions/project");
+    mkdirSync(sessionDir, { recursive: true });
+    const childPath = join(sessionDir, "child.jsonl");
+    const parentPath = join(sessionDir, "parent.jsonl");
+    writeFileSync(childPath, JSON.stringify({ type: "session", id: "legacy-child" }));
+    writeFileSync(parentPath, [
+      JSON.stringify({ type: "session", id: "legacy-parent" }),
+      JSON.stringify({ type: "custom_message", customType: "subagent_result", details: { sessionFile: childPath } }),
+    ].join("\n"));
+    writeFileSync(join(sessionDir, "root.jsonl"), JSON.stringify({ type: "session", id: "legacy-root" }));
+    writeEpisode(L, "legacy-parent", null, "parent legacy prose");
+    writeEpisode(L, "legacy-child", null, "child legacy prose");
+    writeEpisode(L, "unrecoverable", null, "unknown prose");
+    writeEpisode(L, "legacy-root", null, "apparently standalone but historically unknown");
+
+    const episodes = loadEpisodes(L) as any[];
+    const families = groupEpisodesByProvenance(episodes);
+    const linked = families.find(f => f.episodes.some((ep: any) => ep.sessionId === "legacy-parent"))!;
+    assert.deepEqual(linked.episodes.map((ep: any) => ep.sessionId).sort(), ["legacy-child", "legacy-parent"]);
+    for (const id of ["unrecoverable", "legacy-root"]) {
+      const unknown = episodes.find(ep => ep.sessionId === id)!;
+      assert.equal(unknown.lineageComplete, false);
+      assert.equal(unknown.lineageSource, "unknown");
+      assert.match(formatDayEvidenceContext([unknown]), /unknown\/incomplete/);
+    }
+  });
+
+  await t.test("family IDs survive across dates and higher-level synthesis instructions", () => {
+    const H = "2026-03-12";
+    const dir = join(TMP, "snorrio", "episodes", H);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "later.md"), [
+      "---",
+      'session_id: "later"',
+      'root_session_id: "family-root"',
+      'provenance_family_id: "family-root"',
+      "lineage_complete: true",
+      "---",
+      "",
+      header("later", H, "09:00"),
+      "later body",
+    ].join("\n"));
+
+    const combined = [...loadEpisodes("2026-03-11"), ...loadEpisodes(H)] as any[];
+    const family = groupEpisodesByProvenance(combined).find(f => f.provenanceFamilyId === "family-root")!;
+    assert.deepEqual(family.episodes.map(ep => ep.sessionId), ["parent", "child", "later"]);
+    assert.match(provenanceInstructions, /appears on multiple dates/);
+    assert.match(provenanceInstructions, /Carry exact provenance_family_id values/);
+    assert.match(provenanceInstructions, /ONE evidence source/);
+  });
+
   await t.test("weekHasData reflects underlying loadEpisodes", () => {
     // 2026-03-05 is a Thursday → ISO week 2026-W10.
     // weekDates should produce 7 dates including A.
