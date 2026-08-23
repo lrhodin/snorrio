@@ -133,6 +133,37 @@ test("metadata migration preserves prose, updates existing frontmatter, writes e
   assert.deepEqual(planProvenanceRecascade(splitResult, { cacheDir, episodesDir, lineageIndex: index }).dates, []);
 });
 
+test("legacy standalone lineage_source none remains unknown unless a durable edge is recoverable", () => {
+  const root = tempRoot();
+  const home = join(root, "home");
+  const episodesDir = join(root, "episodes");
+  const cacheDir = join(root, "cache");
+  const sessionPath = join(root, "standalone.jsonl");
+  writeSession(sessionPath, "standalone");
+  const index = buildSessionLineageIndex([{ id: "standalone", path: sessionPath }]);
+  const dayDir = join(episodesDir, "2026-08-23");
+  mkdirSync(dayDir, { recursive: true });
+  const before = [
+    "---",
+    'session_id: "standalone"',
+    'provenance_family_id: "standalone"',
+    'lineage_source: "none"',
+    "lineage_complete: true",
+    "---",
+    "",
+    "legacy prose",
+  ].join("\n");
+  writeFileSync(join(dayDir, "standalone.md"), before);
+
+  const result = migrateProvenanceMetadata({ episodesDir, cacheDir, lineageIndex: index, home });
+  assert.equal(result.episodesUnknown, 1);
+  const parsed = parseEpisodeFrontmatter(readFileSync(join(dayDir, "standalone.md"), "utf8"));
+  assert.equal(parsed.fields.get("lineage_metadata_version"), "1");
+  assert.equal(parsed.fields.get("lineage_source"), '"unknown"');
+  assert.equal(parsed.fields.get("lineage_complete"), "false");
+  assert.equal(parsed.prose, parseEpisodeFrontmatter(before).prose);
+});
+
 test("cache writes include a sidecar and validation rejects absent, wrong-schema, stale, and structurally stale manifests", () => {
   const root = tempRoot();
   const episodesDir = join(root, "episodes");

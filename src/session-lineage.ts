@@ -67,7 +67,9 @@ let cachedIndex: { seedPaths: string[]; fingerprint: string; value: SessionLinea
 
 function persistentCachePath(): string {
   const home = process.env.SNORRIO_HOME || join(process.env.HOME || "", "snorrio");
-  return join(home, "cache", "session-lineage-structural-v3.json");
+  // Operational acceleration, not epistemic state: keep it under tmp/ so the
+  // versioned data repo does not commit machine-specific mtimes and paths.
+  return join(home, "tmp", "session-lineage-structural-v3.json");
 }
 
 function loadPersistentCache(): void {

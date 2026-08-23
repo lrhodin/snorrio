@@ -78,7 +78,7 @@ export function planProvenanceRecascade(
   const currentlyAffected = new Set(result.affectedDates);
   for (const date of candidates) {
     const manifest = buildCacheProvenanceManifest("day", date, { episodesDir: options.episodesDir, lineageIndex: options.lineageIndex });
-    const signature = JSON.stringify(manifest.families);
+    const signature = JSON.stringify(manifest);
     if (previous.signatures[date] !== signature || !currentlyAffected.has(date)) dates.push(date);
     if (currentlyAffected.has(date)) signatures[date] = signature;
   }
