@@ -207,16 +207,18 @@ through supported Herdr commands.
 ### R5.4 — install Snorrio’s required `pi-herdr-subagents` fork
 
 Snorrio currently requires [lrhodin/pi-herdr-subagents](https://github.com/lrhodin/pi-herdr-subagents)
-pinned to commit `e0eae2bebf6abf7d454b0f1ca20a6de0f35558fc`:
+pinned to commit `f48e61facbf7738f4027d1d29959cd3480c8c0f3`:
 
 ```sh
-pi install git:github.com/lrhodin/pi-herdr-subagents@e0eae2bebf6abf7d454b0f1ca20a6de0f35558fc
+pi install git:github.com/lrhodin/pi-herdr-subagents@f48e61facbf7738f4027d1d29959cd3480c8c0f3
 ```
 
 Do **not** substitute `npm:pi-herdr-subagents` or the unpatched upstream Git
 repository. The fork is required because Snorrio depends on behavior not present
 in upstream v0.2.0:
 
+- a human's Escape-to-steer no longer reported to the parent as a provider
+  failure, and no longer exiting the pane they are steering;
 - immutable root-to-self lineage and numeric recursion depth in child sessions;
 - recursive management tools remaining available when native `tools:` are restricted;
 - truthful, model-visible `spawning: false` policy;
@@ -233,7 +235,7 @@ then install the pinned fork without disturbing unrelated packages. For example:
 
 ```sh
 pi remove npm:pi-herdr-subagents
-pi install git:github.com/lrhodin/pi-herdr-subagents@e0eae2bebf6abf7d454b0f1ca20a6de0f35558fc
+pi install git:github.com/lrhodin/pi-herdr-subagents@f48e61facbf7738f4027d1d29959cd3480c8c0f3
 ```
 
 **Why a pin and not a moving ref.** Pinned refs are not advanced by
