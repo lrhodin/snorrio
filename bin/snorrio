@@ -28,6 +28,28 @@ const SERVICE_NAME = "io.snorrio.dmn.service";
 
 const cmd = process.argv[2];
 
+// Probe a command and return trimmed stdout, or null if it fails.
+//
+// Every call site below treats failure as a legitimate answer ("no such unit",
+// "not registered", "herdr absent"), so the child's stderr is diagnostic noise
+// rather than information. Inheriting it printed lines like
+//   Failed to get unit file state for herdr.service: No such file or directory
+// in the middle of `snorrio status` output while the probe was working exactly
+// as intended: it tries several candidate unit names and keeps the one that
+// answers. stdio must be [ignore, pipe, ignore] to keep that quiet.
+function probe(command, args, timeout = 3000, options = {}) {
+  try {
+    return execFileSync(command, args, {
+      encoding: "utf8",
+      timeout,
+      stdio: ["ignore", "pipe", "ignore"],
+      ...options,
+    }).trim();
+  } catch {
+    return null;
+  }
+}
+
 // Returns the running daemon's PID as a string, or null if not running.
 function daemonPid() {
   if (IS_MACOS) {
@@ -56,37 +78,34 @@ function daemonLoaded() {
 }
 
 function daemonSupervisorStatus() {
-  try {
-    if (IS_MACOS) {
-      const uid = execFileSync("id", ["-u"], { encoding: "utf8", timeout: 2000 }).trim();
-      execFileSync("launchctl", ["print", `gui/${uid}/io.snorrio.dmn`], { stdio: "pipe", timeout: 3000 });
-      return "launchd registered";
-    }
-    const enabled = execFileSync("systemctl", ["--user", "is-enabled", SERVICE_NAME], { encoding: "utf8", timeout: 3000 }).trim();
-    return enabled === "enabled" ? "systemd enabled" : `systemd ${enabled}`;
-  } catch {
-    return "not registered/unknown";
+  if (IS_MACOS) {
+    const uid = probe("id", ["-u"], 2000);
+    if (!uid) return "not registered/unknown";
+    return probe("launchctl", ["print", `gui/${uid}/io.snorrio.dmn`]) === null
+      ? "not registered/unknown"
+      : "launchd registered";
   }
+  const enabled = probe("systemctl", ["--user", "is-enabled", SERVICE_NAME]);
+  if (enabled === null) return "not registered/unknown";
+  return enabled === "enabled" ? "systemd enabled" : `systemd ${enabled}`;
 }
 
 function herdrSupervisorStatus() {
-  try {
-    if (IS_MACOS) {
-      const raw = execFileSync("brew", ["services", "info", "herdr", "--json"], { encoding: "utf8", timeout: 5000 });
-      const service = JSON.parse(raw)?.[0];
-      if (service?.running === true) return "Homebrew service running";
-      if (service?.registered || service?.loaded || service?.schedulable) {
-        return "Homebrew service registered but not running";
-      }
-      return "Homebrew service not registered";
+  if (IS_MACOS) {
+    const raw = probe("brew", ["services", "info", "herdr", "--json"], 5000);
+    if (raw === null) return "not registered/unknown";
+    let service;
+    try { service = JSON.parse(raw)?.[0]; } catch { return "not registered/unknown"; }
+    if (service?.running === true) return "Homebrew service running";
+    if (service?.registered || service?.loaded || service?.schedulable) {
+      return "Homebrew service registered but not running";
     }
-    for (const name of ["herdr.service", "herdr-server.service"]) {
-      try {
-        const enabled = execFileSync("systemctl", ["--user", "is-enabled", name], { encoding: "utf8", timeout: 3000 }).trim();
-        if (enabled === "enabled") return `${name} enabled`;
-      } catch {}
-    }
-  } catch {}
+    return "Homebrew service not registered";
+  }
+  // Try each candidate unit name; a missing one is expected, not an error.
+  for (const name of ["herdr.service", "herdr-server.service"]) {
+    if (probe("systemctl", ["--user", "is-enabled", name]) === "enabled") return `${name} enabled`;
+  }
   return "not registered/unknown";
 }
 
@@ -264,18 +283,13 @@ if (cmd === "flush") {
   // Harness. Snorrio and herdr ship together, so a status line that covers only
   // the memory half hides half the system.
   let herdrLine = "not installed";
-  try {
-    execFileSync("which", ["herdr"], { stdio: "pipe", timeout: 2000 });
-    try {
-      const out = execFileSync("herdr", ["status", "server"], { encoding: "utf8", timeout: 5000 });
-      const version = out.match(/^version:\s*(\S+)/m)?.[1];
-      herdrLine = /status:\s*running/.test(out)
-        ? `server live${version ? ` (${version})` : ""}`
-        : "installed, server not answering";
-    } catch {
-      herdrLine = "installed, server not answering";
-    }
-  } catch {}
+  if (probe("which", ["herdr"], 2000) !== null) {
+    const out = probe("herdr", ["status", "server"], 5000) ?? "";
+    const version = out.match(/^version:\s*(\S+)/m)?.[1];
+    herdrLine = /status:\s*running/.test(out)
+      ? `server live${version ? ` (${version})` : ""}`
+      : "installed, server not answering";
+  }
   console.log(`Harness:   ${herdrLine}`);
   console.log(`Harness supervisor: ${herdrSupervisorStatus()}`);
 
@@ -303,8 +317,9 @@ if (cmd === "flush") {
 
   // Git status
   try {
-    const branch = execSync("git rev-parse --abbrev-ref HEAD", { cwd: PKG_ROOT, encoding: "utf8", timeout: 3000 }).trim();
-    const hash = execSync("git rev-parse --short HEAD", { cwd: PKG_ROOT, encoding: "utf8", timeout: 3000 }).trim();
+    const branch = probe("git", ["rev-parse", "--abbrev-ref", "HEAD"], 3000, { cwd: PKG_ROOT });
+    const hash = probe("git", ["rev-parse", "--short", "HEAD"], 3000, { cwd: PKG_ROOT });
+    if (!branch || !hash) throw new Error("git rev-parse failed");
     console.log(`Version:   ${branch}@${hash}`);
   } catch {}
 
