@@ -26,6 +26,17 @@ pi
 Tell Pi: **set yourself up.** `SETUP.md` is addressed to the agent and is the
 authoritative onboarding procedure.
 
+## Required subagent fork
+
+Snorrio currently depends on
+[`lrhodin/pi-herdr-subagents`](https://github.com/lrhodin/pi-herdr-subagents) at
+commit `e0eae2bebf6abf7d454b0f1ca20a6de0f35558fc`, rather than the upstream npm
+package. The fork adds recursive lineage, default recursive tool access through
+restricted native-tool allowlists, truthful disabled-spawning policy, safe
+resume behavior, and descendant-aware auto-exit. `SETUP.md` contains the exact
+pinned installation and migration commands; setup diagnostics reject unpatched
+sources instead of treating the package name alone as sufficient.
+
 Setup is not finished while Pi is still in the bootstrap terminal. After the
 agent has configured and verified the services:
 

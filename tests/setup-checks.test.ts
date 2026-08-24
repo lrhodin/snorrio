@@ -1,9 +1,21 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createSessionSetupCache, inspectHerdrConfig, isChildSession, parseSectionedToml, runSetupChecks, type CommandRunner, type SetupCheckResult } from "../src/setup-checks.ts";
+import {
+  createSessionSetupCache,
+  inspectHerdrConfig,
+  isChildSession,
+  isLocalSubagentDevelopmentSource,
+  isRequiredSubagentPackageSource,
+  parseSectionedToml,
+  REQUIRED_SUBAGENT_FORK_COMMIT,
+  REQUIRED_SUBAGENT_PACKAGE_SOURCE,
+  runSetupChecks,
+  type CommandRunner,
+  type SetupCheckResult,
+} from "../src/setup-checks.ts";
 
 test("Herdr TOML parsing is section-sensitive", () => {
   const parsed = parseSectionedToml(`
@@ -60,7 +72,9 @@ function setupFixture() {
   writeFileSync(join(snorrioHome, "config/config.json"), "{}");
   mkdirSync(join(home, ".pi/agent/agents"), { recursive: true });
   writeFileSync(join(home, ".pi/agent/agents/recall-digger.md"), "---\nname: recall-digger\n---\n");
-  writeFileSync(join(home, ".pi/agent/settings.json"), JSON.stringify({ packages: ["https://github.com/lrhodin/snorrio", "npm:pi-herdr-subagents"] }));
+  writeFileSync(join(home, ".pi/agent/settings.json"), JSON.stringify({
+    packages: ["https://github.com/lrhodin/snorrio", REQUIRED_SUBAGENT_PACKAGE_SOURCE],
+  }));
   return { home, snorrioHome };
 }
 
@@ -98,6 +112,64 @@ test("injectable setup checks distinguish healthy, dead, and malformed Homebrew 
 
     const malformed = runSetupChecks({ ...common, commandRunner: healthyRunner("not-json") });
     assert.ok(malformed.issues.some(issue => /cannot validate Herdr Homebrew supervision/.test(issue)));
+  } finally { rmSync(fixture.home, { recursive: true, force: true }); }
+});
+
+test("public setup surfaces pin and explain the required subagent fork", () => {
+  const files = [
+    new URL("../README.md", import.meta.url),
+    new URL("../SETUP.md", import.meta.url),
+    new URL("../skills/snorrio/SKILL.md", import.meta.url),
+  ];
+  for (const file of files) {
+    const content = readFileSync(file, "utf8");
+    assert.match(content, /lrhodin\/pi-herdr-subagents/);
+    assert.ok(content.includes(REQUIRED_SUBAGENT_FORK_COMMIT));
+    assert.match(content, /recursive|lineage/i);
+  }
+});
+
+test("required subagent package source is exact while explicit local checkouts remain valid", () => {
+  assert.equal(isRequiredSubagentPackageSource(REQUIRED_SUBAGENT_PACKAGE_SOURCE), true);
+  assert.equal(
+    isRequiredSubagentPackageSource(
+      `https://github.com/lrhodin/pi-herdr-subagents@${REQUIRED_SUBAGENT_FORK_COMMIT}`,
+    ),
+    true,
+  );
+  assert.equal(isRequiredSubagentPackageSource("npm:pi-herdr-subagents"), false);
+  assert.equal(isRequiredSubagentPackageSource("git:github.com/0xRichardH/pi-herdr-subagents"), false);
+  assert.equal(isLocalSubagentDevelopmentSource("../../colter/projects/pi-herdr-subagents"), true);
+  assert.equal(isLocalSubagentDevelopmentSource("/work/pi-herdr-subagents/"), true);
+  assert.equal(isLocalSubagentDevelopmentSource("git:github.com/lrhodin/pi-herdr-subagents"), false);
+});
+
+test("setup rejects unpatched subagent packages and accepts an explicit local checkout", () => {
+  const fixture = setupFixture();
+  try {
+    const settingsPath = join(fixture.home, ".pi/agent/settings.json");
+    const common = {
+      ...fixture,
+      packageRoot: join(fixture.home, "pkg"),
+      platform: "darwin" as const,
+      env: runtimeEnv(),
+      availableTools: ["subagent", "subagent_interrupt", "subagent_resume", "subagents_list"],
+      commandRunner: healthyRunner(),
+    };
+
+    writeFileSync(settingsPath, JSON.stringify({
+      packages: ["https://github.com/lrhodin/snorrio", "npm:pi-herdr-subagents"],
+    }));
+    const upstream = runSetupChecks(common);
+    assert.ok(upstream.issues.some((issue) => /unsupported pi-herdr-subagents source/.test(issue)));
+    assert.ok(upstream.issues.some((issue) => issue.includes(REQUIRED_SUBAGENT_PACKAGE_SOURCE)));
+
+    writeFileSync(settingsPath, JSON.stringify({
+      packages: ["https://github.com/lrhodin/snorrio", "../../projects/pi-herdr-subagents"],
+    }));
+    const local = runSetupChecks(common);
+    assert.ok(local.working.includes("pi-herdr-subagents local development checkout installed"));
+    assert.ok(!local.issues.some((issue) => /pi-herdr-subagents/.test(issue)));
   } finally { rmSync(fixture.home, { recursive: true, force: true }); }
 });
 

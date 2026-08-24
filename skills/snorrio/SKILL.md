@@ -20,8 +20,13 @@ Snorrio fixes this. A daemon watches your sessions. After each one ends, it writ
 
 The current memory and harness layers are installed and verified together. Setup
 is [`SETUP.md`](../../SETUP.md) — requirements addressed to an agent, not an
-installer. `pi-herdr-subagents` is required today; `@ogulcancelik/pi-herdr` is an
-optional control surface, not an architectural dependency.
+installer. Snorrio requires the commit-pinned
+[`lrhodin/pi-herdr-subagents`](https://github.com/lrhodin/pi-herdr-subagents)
+fork at commit `e0eae2bebf6abf7d454b0f1ca20a6de0f35558fc`, documented in
+R5.4, not the upstream npm package: its recursive lineage, tool-policy
+persistence, and descendant-aware auto-exit are part of Snorrio’s
+provenance and delegation contract. `@ogulcancelik/pi-herdr` is an optional
+control surface, not an architectural dependency.
 
 ## How it works
 

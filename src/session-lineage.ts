@@ -143,9 +143,10 @@ function scanSession(inputPath: string): ScannedSession | null {
         headerParentPath = canonicalSessionPath(entry.parentSession);
       }
 
-      // Patched pi-herdr-subagents persists the complete root-to-self chain on
-      // every child, including standalone children. This is stronger than the
-      // optional Pi parentSession field and makes recursion ancestry explicit.
+      // Snorrio's required lrhodin/pi-herdr-subagents fork (pinned in SETUP.md
+      // R5.4) persists the complete root-to-self chain on every child,
+      // including standalone children. This is stronger than the optional Pi
+      // parentSession field and makes recursion ancestry explicit.
       const declared = entry.subagentLineage;
       if (declared != null) {
         try {
