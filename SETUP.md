@@ -89,6 +89,8 @@ which recall snorrio llm
 
 ## 4. Memory daemon
 
+### R4.1 — run the daemon under supervision
+
 Run `src/episode-daemon.ts` continuously with `HOME`, `SNORRIO_HOME`, and a stable
 PATH containing Node and `~/.local/bin`. stdout/stderr go under
 `$SNORRIO_HOME/logs/`.
@@ -102,6 +104,34 @@ a currently live PID.
 
 `snorrio status` separately reports liveness and supervisor registration. Both
 must pass.
+
+### R4.2 — set `PI_CACHE_RETENTION=long` in the daemon's environment
+
+The daemon's service environment must also carry `PI_CACHE_RETENTION=long`.
+Without it, `pi-ai` resolves cache retention to `short` and sends the 5-minute
+`cache_control` form; the `ttl: "1h"` field is emitted *only* when retention is
+`long`. Nothing else sets it, so its absence is silent — the daemon keeps working
+and simply re-pays for prefixes it could have reused.
+
+This is load-bearing because `DEBOUNCE_MS` is 55 minutes, chosen to sit just
+inside the 1-hour cache window so a session that resumes still reads its
+transcript prefix from cache. Ship the debounce without the retention flag and
+you get the worst of both: an hour of added latency and no cache benefit, since
+every re-fire lands well outside 5 minutes.
+
+Verify empirically rather than trusting the config — the value must reach the
+*running* process, not just the unit file:
+
+```sh
+tr '\0' '\n' < /proc/$(pgrep -f episode-daemon.ts)/environ | grep PI_CACHE_RETENTION
+```
+
+On a provider that reports Anthropic cache usage, a real call should show
+`cacheWrite1h` populated and `cacheWrite` (5m) at zero. If `cacheWrite1h` is 0,
+the flag is not reaching the daemon regardless of what the unit file says.
+
+`snorrio status` checks this against the running process and reports
+`daemon 1h prompt cache enabled`.
 
 ## 5. Herdr harness
 

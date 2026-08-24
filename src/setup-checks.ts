@@ -248,6 +248,30 @@ export function runSetupChecks(options: SetupCheckOptions): SetupCheckResult {
   }
   if (daemonPid) working.push(`daemon live (PID ${daemonPid})`);
   else issues.push("memory daemon is not live — no episodes will form until it is (SETUP.md R4.1)");
+
+  // Read the retention flag off the RUNNING process, not the unit file. The
+  // service definition lives outside this repo, so a fresh install can ship the
+  // 55-minute debounce without the 1-hour cache it was sized for — an hour of
+  // added latency and no cache benefit, with nothing failing loudly. A unit file
+  // that declares the value but was never reloaded looks identical on disk.
+  if (daemonPid && platform !== "darwin") {
+    let daemonEnv: string | null = null;
+    try {
+      daemonEnv = readFileSync(`/proc/${daemonPid}/environ`, "utf8");
+    } catch {
+      // Unreadable /proc (permissions, container) is not evidence of
+      // misconfiguration, so stay silent rather than warn wrongly.
+    }
+    if (daemonEnv !== null) {
+      const retention = daemonEnv.split("\0").find((entry) => entry.startsWith("PI_CACHE_RETENTION="));
+      if (retention === "PI_CACHE_RETENTION=long") working.push("daemon 1h prompt cache enabled");
+      else {
+        issues.push(
+          "daemon is missing PI_CACHE_RETENTION=long — it will request the 5-minute prompt cache while DEBOUNCE_MS waits 55 minutes, so every re-fired session re-pays for its transcript prefix (SETUP.md R4.2)",
+        );
+      }
+    }
+  }
   if (platform === "darwin") {
     const uid = run("id", ["-u"], 1500);
     const supervised = uid ? run("launchctl", ["print", `gui/${uid}/io.snorrio.dmn`], 3000) : null;
