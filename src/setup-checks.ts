@@ -24,6 +24,11 @@ export interface SetupCheckResult {
   message: string | null;
 }
 
+export const REQUIRED_SUBAGENT_FORK_COMMIT =
+  "e0eae2bebf6abf7d454b0f1ca20a6de0f35558fc";
+export const REQUIRED_SUBAGENT_PACKAGE_SOURCE =
+  `git:github.com/lrhodin/pi-herdr-subagents@${REQUIRED_SUBAGENT_FORK_COMMIT}`;
+
 export type CommandRunner = (command: string, args: string[], timeout: number) => string | null;
 
 export interface SetupCheckOptions {
@@ -65,6 +70,17 @@ export function inspectHerdrConfig(source: string): HerdrConfigInspection {
     resumeExplicitlyFalse: parsed.values.get("session.resume_agents_on_restore") === "false",
     paneHistoryEnabled: parsed.values.get("experimental.pane_history") === "true",
   };
+}
+
+export function isRequiredSubagentPackageSource(source: string): boolean {
+  return source === REQUIRED_SUBAGENT_PACKAGE_SOURCE ||
+    source === `https://github.com/lrhodin/pi-herdr-subagents@${REQUIRED_SUBAGENT_FORK_COMMIT}`;
+}
+
+export function isLocalSubagentDevelopmentSource(source: string): boolean {
+  if (/^(?:npm:|git:|https?:|ssh:)/.test(source)) return false;
+  const normalized = source.replace(/\\/g, "/").replace(/\/+$/, "");
+  return normalized.split("/").at(-1) === "pi-herdr-subagents";
 }
 
 export function createSessionSetupCache(check: () => SetupCheckResult): SessionSetupCache {
@@ -195,10 +211,26 @@ export function runSetupChecks(options: SetupCheckOptions): SetupCheckResult {
     packageSources = (settings.packages ?? []).map((entry: any) => typeof entry === "string" ? entry : entry?.source ?? "");
     if (packageSources.some((source) => source.includes("snorrio"))) working.push("snorrio Pi package installed");
     else issues.push("snorrio not installed as a Pi package — run `pi install https://github.com/lrhodin/snorrio`");
-    if (packageSources.some((source) => source.includes("pi-herdr-subagents"))) working.push("pi-herdr-subagents installed");
-    else issues.push("required Pi package missing: pi-herdr-subagents (SETUP.md R5.7)");
+    const subagentSources = packageSources.filter((source) => source.includes("pi-herdr-subagents"));
+    const requiredForkInstalled = subagentSources.some(isRequiredSubagentPackageSource);
+    const localDevelopmentInstalled = subagentSources.some(isLocalSubagentDevelopmentSource);
+    const unsupportedSources = subagentSources.filter(
+      (source) => !isRequiredSubagentPackageSource(source) && !isLocalSubagentDevelopmentSource(source),
+    );
+    if (requiredForkInstalled) {
+      working.push(`required pi-herdr-subagents fork installed (${REQUIRED_SUBAGENT_FORK_COMMIT.slice(0, 7)})`);
+    } else if (localDevelopmentInstalled) {
+      working.push("pi-herdr-subagents local development checkout installed");
+    } else {
+      issues.push(`required Pi package missing: install ${REQUIRED_SUBAGENT_PACKAGE_SOURCE} (SETUP.md R5.4)`);
+    }
+    if (unsupportedSources.length > 0) {
+      issues.push(
+        `unsupported pi-herdr-subagents source installed (${unsupportedSources.join(", ")}); remove it and install ${REQUIRED_SUBAGENT_PACKAGE_SOURCE} (SETUP.md R5.4)`,
+      );
+    }
     if (packageSources.some((source) => source.includes("pi-herdr-agents"))) {
-      issues.push("pi-herdr-agents is installed and collides with pi-herdr-subagents; remove pi-herdr-agents (SETUP.md R5.7)");
+      issues.push("pi-herdr-agents is installed and collides with pi-herdr-subagents; remove pi-herdr-agents (SETUP.md R5.4)");
     }
   } catch {
     issues.push("cannot read Pi settings");

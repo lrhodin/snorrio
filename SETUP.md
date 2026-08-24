@@ -197,22 +197,43 @@ delivery = "terminal"
 After an intentional config edit, run `herdr config check` and restart/reload
 through supported Herdr commands.
 
-### R5.4 — install the required Pi package
+### R5.4 — install Snorrio’s required `pi-herdr-subagents` fork
 
-`pi-herdr-subagents` is required. It supplies:
+Snorrio currently requires [lrhodin/pi-herdr-subagents](https://github.com/lrhodin/pi-herdr-subagents)
+pinned to commit `e0eae2bebf6abf7d454b0f1ca20a6de0f35558fc`:
 
-- `subagent`
-- `subagent_interrupt`
-- `subagent_resume`
-- `subagents_list`
+```sh
+pi install git:github.com/lrhodin/pi-herdr-subagents@e0eae2bebf6abf7d454b0f1ca20a6de0f35558fc
+```
 
-Add `npm:pi-herdr-subagents` to Pi’s packages without removing existing entries.
+Do **not** substitute `npm:pi-herdr-subagents` or the unpatched upstream Git
+repository. The fork is required because Snorrio depends on behavior not present
+in upstream v0.2.0:
+
+- immutable root-to-self lineage and numeric recursion depth in child sessions;
+- recursive management tools remaining available when native `tools:` are restricted;
+- truthful, model-visible `spawning: false` policy;
+- persisted tool policy that cannot silently escalate on resume; and
+- auto-exit waiting for descendant completion instead of killing its watcher.
+
+It supplies `subagent`, `subagent_interrupt`, `subagent_resume`, and
+`subagents_list`. A local source path ending in `pi-herdr-subagents` is also
+accepted for explicit development checkouts, but reproducible installations use
+the commit-pinned Git source above.
+
+If an unsupported source is already configured, remove that exact source first,
+then install the pinned fork without disturbing unrelated packages. For example:
+
+```sh
+pi remove npm:pi-herdr-subagents
+pi install git:github.com/lrhodin/pi-herdr-subagents@e0eae2bebf6abf7d454b0f1ca20a6de0f35558fc
+```
 
 `npm:@ogulcancelik/pi-herdr` is **optional**. Install it only when the human wants
 its structured `herdr_layout`, `herdr_pane`, and `herdr_agent` tools. Snorrio’s
 setup and diagnostics must not require it.
 
-Never install `pi-herdr-agents`: it collides with `pi-herdr-subagents` at the
+Never install `pi-herdr-agents`: it collides with the required fork at the
 extension/tool surface.
 
 ### R5.5 — expose Snorrio’s agent definitions
