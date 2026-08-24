@@ -287,10 +287,12 @@ New installations need no migration. When `~/snorrio/episodes` already contains 
 
 ```sh
 snorrio migrate-provenance --dry-run
-snorrio migrate-provenance
+nohup snorrio migrate-provenance > /tmp/migrate-provenance.log 2>&1 &
 ```
 
 The episode migration is metadata-only and preserves episode prose byte-for-byte. It also adds versioned cache provenance manifests, then regenerates temporal summaries only for dates where recovered parent/child or result-consumer relationships could already have been double-counted. It is idempotent.
+
+Run the writing pass **detached**, as above, and do not wrap it in a timeout. Regenerating summaries costs one LLM call per affected date and can take tens of minutes; a month of history is a normal load. Killing it partway is recoverable — nothing commits until the run finishes, and a re-run resumes — but it wastes the calls already spent. If any date fails, the command reports `INCOMPLETE` and names those dates; a second run retries only those and makes zero calls for the rest.
 
 ## 8. Final launch and runtime proof
 

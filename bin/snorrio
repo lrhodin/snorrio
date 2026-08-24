@@ -14,6 +14,7 @@ import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { execSync, execFileSync } from "child_process";
 import { platform } from "os";
+import { checkSubcommandArgs } from "../src/cli-args.ts";
 
 const HOME = process.env.HOME;
 const PKG_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -27,6 +28,57 @@ const PLIST_PATH = join(HOME, "Library", "LaunchAgents", "io.snorrio.dmn.plist")
 const SERVICE_NAME = "io.snorrio.dmn.service";
 
 const cmd = process.argv[2];
+const cmdArgs = process.argv.slice(3);
+
+// Per-subcommand usage. Printed on `--help` and referenced by every rejection,
+// so an operator who guesses a flag wrong is told what exists instead of having
+// the flag ignored.
+const USAGE = {
+  flush: "Usage: snorrio flush\n  Flush pending sessions through the daemon.",
+  sweep: "Usage: snorrio sweep\n  Find & generate missing episodes, then cascade caches.",
+  reprocess: [
+    "Usage: snorrio reprocess <range> [depth]",
+    "  range: YYYY-MM-DD | YYYY-Www | YYYY-MM | YYYY-QN | YYYY",
+    "  depth: episode (default) | day | week | month | quarter",
+  ].join("\n"),
+  status: "Usage: snorrio status\n  Show daemon, harness, and data status.",
+  "migrate-provenance": [
+    "Usage: snorrio migrate-provenance [--dry-run]",
+    "  Add episode lineage metadata and cache provenance manifests, then",
+    "  recascade dates whose evidence could have been double-counted.",
+    "",
+    "  --dry-run   Report what would change and write nothing.",
+    "",
+    "  Without --dry-run this WRITES and may spend LLM calls rebuilding",
+    "  temporal caches. It is idempotent and preserves episode prose",
+    "  byte-for-byte. Run it detached; interrupting it mid-cascade leaves",
+    "  the recascade marker unwritten and requires a re-run.",
+  ].join("\n"),
+  update: "Usage: snorrio update\n  Pull latest and restart the daemon.",
+};
+
+// Flags each subcommand accepts. Anything else is an error, never a default.
+const FLAG_SPECS = {
+  flush: { allowed: [] },
+  sweep: { allowed: [] },
+  reprocess: { allowed: [], positionals: 2 },
+  status: { allowed: [] },
+  "migrate-provenance": { allowed: ["--dry-run"] },
+  update: { allowed: [] },
+};
+
+// Validate before any side effect. Help wins over execution.
+if (Object.hasOwn(FLAG_SPECS, cmd ?? "")) {
+  const check = checkSubcommandArgs(cmd, cmdArgs, FLAG_SPECS[cmd]);
+  if (check.help) {
+    console.log(USAGE[cmd]);
+    process.exit(0);
+  }
+  if (check.error) {
+    console.error(check.error);
+    process.exit(2);
+  }
+}
 
 // Probe a command and return trimmed stdout, or null if it fails.
 //
@@ -267,7 +319,7 @@ if (cmd === "flush") {
 
 } else if (cmd === "migrate-provenance") {
   const args = [join(PKG_ROOT, "src/episode-daemon.ts"), "--migrate-provenance"];
-  if (process.argv.includes("--dry-run")) args.push("--dry-run");
+  if (cmdArgs.includes("--dry-run")) args.push("--dry-run");
   try {
     execFileSync("node", args, { stdio: "inherit", env: { ...process.env, SNORRIO_HOME } });
   } catch {

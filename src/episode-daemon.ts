@@ -39,6 +39,7 @@ import { sessionMessagesToLlm, type RawSessionMessage } from "./model-independen
 import { atomicWriteFile as atomicWrite } from "./atomic-write.ts";
 import { ensureDataRepo, commitDataRepo } from "./data-repo.ts";
 import { recall } from "./recall-engine.ts";
+import { withRetries } from "./retry.ts";
 import { decideCascade, dateToWeek, monthToQuarter, type CascadeLevel } from "./cascade-decision.ts";
 import { findStaleSessions } from "./stale-sessions.ts";
 import {
@@ -276,33 +277,63 @@ async function cascadeForDate(dateStr: string) {
 
 // Rebuild caches for a set of refs at one level.
 // Parallel for day/week/month, sequential for quarter/year.
-async function rebuildCache(level: CacheLevel, refs: string[], prefix: string = "", strict: boolean = false) {
+//
+// Returns the refs that could not be rebuilt. `strict` callers used to get an
+// exception on the first failure, which threw away every sibling that had
+// already succeeded: on 2026-08-24 a 26-day migration aborted entirely because
+// one day returned no summary under 26-way parallel LLM load, while that same
+// day rebuilt fine on its own moments later. A single flaky provider response
+// must not discard 25 good rebuilds, so failures are retried and then reported
+// to the caller, which decides what remains outstanding.
+const REBUILD_ATTEMPTS = 3;
+
+async function rebuildCache(
+  level: CacheLevel,
+  refs: string[],
+  prefix: string = "",
+  strict: boolean = false,
+): Promise<string[]> {
   const prompts: Record<string, string> = {
     day: CACHE_Q_DAY, week: CACHE_Q_WEEK, month: CACHE_Q_MONTH,
     quarter: CACHE_Q_QUARTER, year: CACHE_Q_YEAR,
   };
-  if (refs.length === 0) return;
+  if (refs.length === 0) return [];
   log(`${prefix}  Rebuilding ${refs.length} ${level} cache${refs.length > 1 ? "s" : ""}`);
 
-  const rebuild = async (ref: string) => {
-    try {
-      const summary = await recall(ref, prompts[level], null);
-      if (summary && !summary.startsWith("[recall:")) {
-        writeCacheWithProvenance(level, ref, summary as string, { lineageIndex: activeLineageIndex ?? undefined });
-        log(`${prefix}    ${ref} ✓`);
-      } else {
-        const message = `cache rebuild returned no usable summary for ${level} ${ref}`;
-        log(`${prefix}    ${ref} ✗ ${message}`);
-        if (strict) throw new Error(message);
-      }
-    } catch (err: any) {
-      log(`${prefix}    ${ref} ✗ ${err.message?.slice(0, 100)}`);
-      if (strict) throw err;
+  const failed: string[] = [];
+
+  // One rebuild attempt. Returns null on success, else why it failed.
+  const attempt = async (ref: string): Promise<string | null> => {
+    const summary = await recall(ref, prompts[level], null);
+    if (summary && !summary.startsWith("[recall:")) {
+      writeCacheWithProvenance(level, ref, summary as string, { lineageIndex: activeLineageIndex ?? undefined });
+      return null;
     }
+    return `cache rebuild returned no usable summary for ${level} ${ref}`;
+  };
+
+  const rebuild = async (ref: string) => {
+    // Retries apply only where a caller depends on completeness. Live-mode
+    // cascades run constantly and self-heal via validateCaches, so paying for
+    // repeat LLM calls there would be waste.
+    const attempts = strict ? REBUILD_ATTEMPTS : 1;
+    const problem = await withRetries((n) => attempt(ref), {
+      attempts,
+      onAttempt: ({ attempt: n, problem, final }) => {
+        if (problem === null) {
+          log(`${prefix}    ${ref} ✓${n > 1 ? ` (attempt ${n})` : ""}`);
+          return;
+        }
+        log(`${prefix}    ${ref} ✗ ${problem}${final ? "" : ` — retrying (${n}/${attempts - 1})`}`);
+      },
+    });
+    if (problem !== null) failed.push(ref);
   };
 
   if (["day", "week", "month"].includes(level)) await Promise.all(refs.map(rebuild));
   else for (const ref of refs) await rebuild(ref);
+
+  return failed;
 }
 
 // Walk the cache tree bottom-up, rebuilding anything where a child is newer than its parent.
@@ -419,12 +450,26 @@ async function validateCaches(prefix: string = "") {
 // Derive unique refs at each level from a set of dates, rebuild bottom-up.
 // `from` controls the starting level: "day" | "week" | "month" | "quarter" | "year".
 // Pure decision lives in cascade-decision.ts; this wrapper does the IO.
-async function batchCascade(dates: Set<string>, from: string = "day", prefix: string = "", strict: boolean = false) {
+// Returns the refs that failed, keyed by level. An empty object means the whole
+// cascade succeeded. Failures no longer abort the remaining levels: a stale
+// higher tier is repaired by re-running the failed date, which cascades upward
+// again, whereas aborting leaves every untouched level stale with no record of
+// what still needs doing.
+async function batchCascade(
+  dates: Set<string>,
+  from: string = "day",
+  prefix: string = "",
+  strict: boolean = false,
+): Promise<Partial<Record<CascadeLevel, string[]>>> {
   const decision = decideCascade(dates, from as CascadeLevel);
+  const failures: Partial<Record<CascadeLevel, string[]>> = {};
   for (const level of ["day", "week", "month", "quarter", "year"] as CascadeLevel[]) {
     const refs = decision[level];
-    if (refs.length) await rebuildCache(level, refs, prefix, strict);
+    if (!refs.length) continue;
+    const failed = await rebuildCache(level, refs, prefix, strict);
+    if (failed.length) failures[level] = failed;
   }
+  return failures;
 }
 
 // ============================================================================
@@ -848,24 +893,36 @@ async function migrateProvenanceCommand(dryRun: boolean) {
     dryRun,
   });
   const recascade = planProvenanceRecascade(result, { cacheDir: CACHE_DIR, episodesDir: EPISODES_DIR, lineageIndex: index });
+  let failedDates: string[] = [];
   if (!dryRun) {
     if (recascade.dates.length > 0) {
-      await batchCascade(new Set(recascade.dates), "day", "[migration]", true);
+      const failures = await batchCascade(new Set(recascade.dates), "day", "[migration]", true);
+      failedDates = failures.day ?? [];
     }
-    // Record signatures only after every requested cascade succeeds. A second
-    // run can then prove that no recovered family changed and make zero LLM
-    // calls. Do not overwrite this marker with a differently shaped report.
-    writeProvenanceRecascadeMarker(CACHE_DIR, recascade.signatures);
+    // Record a signature only for a date whose day cache actually rebuilt. A
+    // second run then makes zero LLM calls for the settled dates while still
+    // retrying the ones that failed; recording a failed date would mark it
+    // permanently done and silently leave double-counted evidence in place.
+    // Do not overwrite this marker with a differently shaped report.
+    const settled = Object.fromEntries(
+      Object.entries(recascade.signatures).filter(([date]) => !failedDates.includes(date)),
+    );
+    writeProvenanceRecascadeMarker(CACHE_DIR, settled);
   }
   log(`  Episodes: ${result.episodesScanned} scanned, ${result.episodesChanged} metadata changes, ${result.episodesUnknown} unknown`);
   log(`  Cache manifests: ${result.manifestsWritten}${dryRun ? " would be written" : " written"}`);
   log(`  Duplicate-evidence dates: ${result.affectedDates.length}; ${recascade.dates.length} require recascade`);
 
   if (!dryRun) {
-    commitDataRepo({ message: `migrate provenance: ${result.episodesChanged} episodes, ${result.manifestsWritten} manifests, ${recascade.dates.length} dates recascaded` });
+    const rebuilt = recascade.dates.length - failedDates.length;
+    commitDataRepo({ message: `migrate provenance: ${result.episodesChanged} episodes, ${result.manifestsWritten} manifests, ${rebuilt} dates recascaded` });
+    if (failedDates.length) {
+      log(`  INCOMPLETE: ${failedDates.length} date(s) failed to rebuild: ${failedDates.join(", ")}`);
+      log("  Re-run `snorrio migrate-provenance` to retry only those dates.");
+    }
   }
   activeLineageIndex = null;
-  return result;
+  return { ...result, failedDates };
 }
 
 // ============================================================================
@@ -874,6 +931,16 @@ async function migrateProvenanceCommand(dryRun: boolean) {
 
 async function main() {
   if (process.argv.includes("--migrate-provenance") || process.argv.includes("--add-frontmatter")) {
+    // Reject unrecognized flags rather than defaulting to the writing path.
+    // `--help` used to fall through here and run the real migration, because
+    // dry-run was read as a second independent `includes()` check.
+    const known = new Set(["--migrate-provenance", "--add-frontmatter", "--dry-run"]);
+    const extra = process.argv.slice(2).filter((arg) => arg.startsWith("-") && !known.has(arg));
+    if (extra.length) {
+      console.error(`Unknown flag for --migrate-provenance: ${extra[0]}`);
+      console.error("Accepted flags: --dry-run");
+      process.exit(2);
+    }
     await migrateProvenanceCommand(process.argv.includes("--dry-run"));
     process.exit(0);
   }
