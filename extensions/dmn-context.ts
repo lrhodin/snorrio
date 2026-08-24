@@ -45,7 +45,12 @@ function formatGap(ms: number): string {
   return remHrs > 0 ? `${days}d ${remHrs}h` : `${days} day${days > 1 ? "s" : ""}`;
 }
 
-export const GAP_MS = 4.5 * 60 * 1000; // 4:30, aligned with DMN idle timer
+// Threshold for inserting a "N of silence" marker between user messages. This
+// is a readability choice about the transcript, deliberately NOT tied to the
+// daemon's DEBOUNCE_MS (55min): a ten-minute break is worth marking, and
+// raising this to match the idle timer would erase most real pauses. It was
+// once described as aligned with that timer; it never needed to be.
+export const GAP_MS = 4.5 * 60 * 1000; // 4:30
 
 // Pure transform: mutates `messages` in place, prefixing user/assistant
 // messages with timestamps and silence markers per the rules described on

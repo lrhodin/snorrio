@@ -32,7 +32,7 @@ control surface, not an architectural dependency.
 
 ### Episodes
 
-A daemon (`io.snorrio.dmn`) watches session directories. When a session goes quiet for 4 minutes 30 seconds, the daemon writes an episode — a markdown summary capturing what happened, what was decided, and what matters going forward. Episodes live in `~/snorrio/episodes/YYYY-MM-DD/`.
+A daemon (`io.snorrio.dmn`) watches session directories. When a session goes quiet for 55 minutes (or immediately on `snorrio flush`), the daemon writes an episode — a markdown summary capturing what happened, what was decided, and what matters going forward. Episodes live in `~/snorrio/episodes/YYYY-MM-DD/`.
 
 ### Temporal hierarchy
 

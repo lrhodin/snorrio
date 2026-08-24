@@ -74,6 +74,6 @@ snorrio update    # pulls latest code and restarts daemon
 
 ## Timing
 
-- **Debounce:** 4 minutes 30 seconds of inactivity triggers episode generation
-- **Cascade:** new episode → day cache → week cache (blocking). Month/quarter update in background.
+- **Debounce:** 55 minutes of inactivity triggers episode generation. Sized to sit just inside Anthropic's 1-hour prompt cache, so a session that resumes still reads its transcript prefix from cache. Run `snorrio flush` to skip the wait — it cancels pending timers and reconciles against disk.
+- **Cascade:** new episode → day cache → week cache (blocking). Month/quarter update in background. A full day→year cascade is five serial LLM calls, roughly 7 minutes; the debounce window is what keeps it from re-running under an active session.
 - **Sweep:** midnight sweep catches anything missed during the day

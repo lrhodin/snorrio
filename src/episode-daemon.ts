@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // Episode pipeline daemon.
 //
-// Watches pi session files. After 4:30 of inactivity on a file,
+// Watches pi session files. After DEBOUNCE_MS of inactivity on a file (55min),
 // generates an episode using buildSessionContext + complete().
-// Midnight sweep catches anything missed.
+// `snorrio flush` skips the wait; midnight sweep catches anything missed.
 //
 // No manifest. No state tracking. Idempotent — episodes overwrite freely.
 // No minimum message threshold — every session with an assistant message
@@ -12,8 +12,9 @@
 // Cache lifecycle:
 //   New episode (live mode) → cascade day → week → month → quarter → year
 //     for that date. No first-episode-of-day detection — every episode
-//     unconditionally rebuilds the full stack. With ~4:30 debounce in live
-//     mode this is bounded; batch paths (--reprocess, midnight sweep) set
+//     unconditionally rebuilds the full stack (~7 min of serial LLM calls), so
+//     the DEBOUNCE_MS window is what bounds how often that runs; batch paths
+//     (--reprocess, midnight sweep) set
 //     `_skipCascade` and drive their own deduplicated batchCascade at the
 //     end. Pure decision lives in cascade-decision.ts.
 //   All writes are atomic (tmp + rename + cleanup-on-failure via
@@ -96,7 +97,22 @@ const PI_SESSIONS_DIR = join(HOME, ".pi/agent/sessions");
 const EPISODES_DIR = join(SNORRIO_HOME, "episodes");
 const CACHE_DIR = join(SNORRIO_HOME, "cache");
 
-const DEBOUNCE_MS = 270_000; // 4 minutes 30 seconds
+// Wait for a session to go quiet before generating its episode.
+//
+// Was 4:30, chosen to land inside Anthropic's 5-minute prompt cache so a
+// re-fired session reused its transcript prefix. Two things changed: the 1-hour
+// cache TTL exists now and the daemon asks for it (PI_CACHE_RETENTION=long in
+// the unit file), and 4:30 meant an active session re-generated its episode
+// every few minutes, each time triggering a full day→year cascade — five LLM
+// calls, ~7 minutes. Two live sessions were enough to keep the daemon
+// permanently busy rebuilding summaries that the next write invalidated.
+//
+// 55 minutes sits just inside the 1-hour cache window, so a long session that
+// re-fires still reads its prefix from cache instead of paying for it again.
+// The cost is latency: a finished session's episode can be up to an hour late.
+// `snorrio flush` cancels every pending timer and reconciles against disk, so
+// that wait is always skippable on demand.
+const DEBOUNCE_MS = 3_300_000; // 55 minutes — just inside the 1h prompt cache
 const TZ = getTimezone();
 
 function getMachine() {
@@ -270,8 +286,10 @@ const CACHE_Q_YEAR = "Write a narrative of this year so far. Every thread surfac
 async function cascadeForDate(dateStr: string) {
   // Only called in live mode (debounce path) — _skipCascade gates this.
   // Historical paths (flush/sweep/reprocess) handle their own cascading.
-  // In live mode, always full cascade: episodes arrive one at a time
-  // with 4.5min debounce, so there's no thrashing risk.
+  // In live mode, always full cascade: episodes arrive one at a time and the
+  // 55min debounce keeps this from re-running while a session is still active.
+  // A full cascade is five serial LLM calls (~7min), so that window is what
+  // makes an unconditional rebuild affordable.
   await batchCascade(new Set([dateStr]), "day");
 }
 
