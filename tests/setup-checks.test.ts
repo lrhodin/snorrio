@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   createSessionSetupCache,
+  describeHarnessEnvironment,
   inspectHerdrConfig,
   isChildSession,
   isLocalSubagentDevelopmentSource,
@@ -189,4 +190,67 @@ test("Pi subagent environment identifies children whose spawning tools may be in
   assert.equal(isChildSession({ PI_SUBAGENT_ID: "abc" }), true);
   assert.equal(isChildSession({ PI_SUBAGENT_AGENT: "recall-digger" }), false);
   assert.equal(isChildSession({ PI_SUBAGENT_SHELL_READY_DELAY_MS: "500" }), false);
+});
+
+// ── Environment split ──
+// Not being inside Herdr is a different environment, not a defect. These guard
+// the bug class where a standalone `pi` or `pi -p` run gets told to repair a
+// harness it was never meant to have.
+
+test("harness environment is classified, and a partial runtime is treated as standalone", () => {
+  assert.equal(describeHarnessEnvironment({}).inHerdr, false);
+  assert.match(describeHarnessEnvironment({}).summary, /standalone/);
+
+  const full = describeHarnessEnvironment({
+    HERDR_ENV: "1", HERDR_PANE_ID: "w1:p1", HERDR_TAB_ID: "w1:t1",
+    HERDR_WORKSPACE_ID: "w1", HERDR_SOCKET_PATH: "/tmp/herdr.sock",
+  });
+  assert.equal(full.inHerdr, true);
+  assert.match(full.summary, /w1\/w1:t1\/w1:p1/);
+
+  // HERDR_ENV set but IDs missing is the one genuinely broken shape: it must not
+  // claim harness control it cannot exercise.
+  const partial = describeHarnessEnvironment({ HERDR_ENV: "1", HERDR_PANE_ID: "w1:p1" });
+  assert.equal(partial.inHerdr, false);
+  assert.match(partial.summary, /incomplete runtime/);
+  assert.match(partial.summary, /HERDR_TAB_ID/);
+});
+
+test("standalone Pi reports zero issues and no harness guidance; a Herdr pane is fully diagnosed", () => {
+  const fixture = setupFixture();
+  try {
+    const common = { ...fixture, packageRoot: join(fixture.home, "pkg"), platform: "darwin" as const, commandRunner: healthyRunner() };
+
+    // Standalone: no herdr binary, no server, no subagent tools — and no issues.
+    const standalone = runSetupChecks({ ...common, env: {}, availableTools: [] });
+    assert.equal(standalone.issues.length, 0, standalone.issues.join("\n"));
+    assert.ok(standalone.working.some(w => /standalone Pi/.test(w)));
+    assert.ok(!standalone.working.some(w => /herdr server live/.test(w)),
+      "standalone must not report harness state");
+    assert.ok(!standalone.issues.some(i => /subagent lifecycle tools/.test(i)),
+      "standalone must not demand pane-only tools");
+
+    // Inside a pane the same fixture still gets the full harness diagnosis.
+    const inPane = runSetupChecks({ ...common, env: runtimeEnv(), availableTools: [] });
+    assert.ok(inPane.working.some(w => /Herdr pane/.test(w)));
+    assert.ok(inPane.issues.some(i => /subagent lifecycle tools unavailable/.test(i)),
+      "a pane session with no subagent tools is genuinely misconfigured");
+  } finally { rmSync(fixture.home, { recursive: true, force: true }); }
+});
+
+test("a broken harness inside a pane is still an issue, never silently downgraded", () => {
+  const fixture = setupFixture();
+  try {
+    const deadServer: CommandRunner = (command, args) => {
+      const key = `${command} ${args.join(" ")}`;
+      if (key === "herdr status server --json") return JSON.stringify({ running: false });
+      return healthyRunner()(command, args, 0);
+    };
+    const result = runSetupChecks({
+      ...fixture, packageRoot: join(fixture.home, "pkg"), platform: "darwin" as const,
+      commandRunner: deadServer, env: runtimeEnv(),
+      availableTools: ["subagent", "subagent_interrupt", "subagent_resume", "subagents_list"],
+    });
+    assert.ok(result.issues.some(i => /herdr server is not answering/.test(i)));
+  } finally { rmSync(fixture.home, { recursive: true, force: true }); }
 });

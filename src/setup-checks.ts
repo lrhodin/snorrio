@@ -136,6 +136,48 @@ export function isChildSession(env: NodeJS.ProcessEnv): boolean {
   return Boolean(env.PI_SUBAGENT_ID);
 }
 
+export const HERDR_RUNTIME_VARS = [
+  "HERDR_PANE_ID",
+  "HERDR_TAB_ID",
+  "HERDR_WORKSPACE_ID",
+  "HERDR_SOCKET_PATH",
+] as const;
+
+export interface HarnessEnvironment {
+  /** True only when this process can actually drive panes and agents. */
+  inHerdr: boolean;
+  /** Reported as `working`, never as an issue: both states are valid. */
+  summary: string;
+}
+
+/**
+ * Classify which environment this session is running in.
+ *
+ * Inside a Herdr pane, harness control is available and harness instructions
+ * apply. Outside one, they do not, and injecting them would describe tools the
+ * session cannot use. Neither state is an error; they are different
+ * environments that need different context.
+ *
+ * A partial environment (HERDR_ENV=1 with runtime IDs missing) is the one
+ * genuinely broken case, so it is reported as not-in-herdr and names the gap.
+ */
+export function describeHarnessEnvironment(env: NodeJS.ProcessEnv): HarnessEnvironment {
+  const missing = HERDR_RUNTIME_VARS.filter((name) => !env[name]);
+  if (env.HERDR_ENV !== "1") {
+    return { inHerdr: false, summary: "environment: standalone Pi (no Herdr harness; pane and agent control unavailable)" };
+  }
+  if (missing.length > 0) {
+    return {
+      inHerdr: false,
+      summary: `environment: HERDR_ENV=1 but incomplete runtime (${missing.join(", ")} unset); treating as standalone`,
+    };
+  }
+  return {
+    inHerdr: true,
+    summary: `environment: Herdr pane ${env.HERDR_WORKSPACE_ID}/${env.HERDR_TAB_ID}/${env.HERDR_PANE_ID}`,
+  };
+}
+
 export function runSetupChecks(options: SetupCheckOptions): SetupCheckResult {
   const { home, packageRoot, snorrioHome } = options;
   const env = options.env ?? process.env;
@@ -148,6 +190,18 @@ export function runSetupChecks(options: SetupCheckOptions): SetupCheckResult {
   const checkedAt = new Date().toISOString();
   const configPath = join(snorrioHome, "config", "config.json");
   const herdrConfigPath = join(home, ".config", "herdr", "config.toml");
+
+  // Running outside a Herdr pane is a DIFFERENT ENVIRONMENT, not a defect.
+  // A bare `pi` in an ordinary shell, a `pi -p` one-shot, or a CI invocation is
+  // legitimate and complete on its own terms. Reporting it as an issue would
+  // demand the human fix something that is not broken.
+  //
+  // What must not happen is the reverse: harness-specific guidance reaching a
+  // session that cannot act on it. Pane and agent instructions are only true
+  // inside a pane, so the environment is reported once, as a fact, and the
+  // harness checks below are scoped to it.
+  const harness = describeHarnessEnvironment(env);
+  working.push(harness.summary);
 
   const legacyPaths: string[] = [];
   if (existsSync(join(home, ".snorrio"))) legacyPaths.push("~/.snorrio");
@@ -236,8 +290,14 @@ export function runSetupChecks(options: SetupCheckOptions): SetupCheckResult {
     issues.push("cannot read Pi settings");
   }
 
-  const herdrPresent = executable("herdr");
-  if (!herdrPresent) {
+  // Harness diagnosis is scoped to the harness environment. A standalone Pi
+  // session is not required to have a herdr binary, a running server, or a
+  // supervised service; demanding them there reports a fault that does not
+  // exist. Inside a pane, all of it is load-bearing and checked.
+  const herdrPresent = harness.inHerdr && executable("herdr");
+  if (!harness.inHerdr) {
+    // Nothing to check, and nothing wrong. The summary already said where we are.
+  } else if (!herdrPresent) {
     issues.push("herdr is not on PATH (SETUP.md R5.1)");
   } else {
     const statusText = run("herdr", ["status", "server", "--json"], 5000);
@@ -300,13 +360,7 @@ export function runSetupChecks(options: SetupCheckOptions): SetupCheckResult {
     }
   }
 
-  const runtimeVars = ["HERDR_PANE_ID", "HERDR_TAB_ID", "HERDR_WORKSPACE_ID", "HERDR_SOCKET_PATH"];
-  const missingRuntime = runtimeVars.filter((name) => !env[name]);
-  if (env.HERDR_ENV === "1" && missingRuntime.length === 0) {
-    working.push(`Pi inside Herdr (${env.HERDR_WORKSPACE_ID}/${env.HERDR_TAB_ID}/${env.HERDR_PANE_ID}, socket ${env.HERDR_SOCKET_PATH})`);
-  } else {
-    issues.push(`Pi is not running inside a Herdr pane — require HERDR_ENV=1 plus ${runtimeVars.join(", ")}. Exit, attach with \`herdr\`, and start Pi in that pane; do not nest Herdr.`);
-  }
+
 
   const agentDir = join(home, ".pi", "agent", "agents");
   let definitions: string[] = [];
@@ -314,14 +368,19 @@ export function runSetupChecks(options: SetupCheckOptions): SetupCheckResult {
   if (definitions.includes("recall-digger.md")) working.push("subagent definition recall-digger available");
   else issues.push("recall-digger subagent definition is not discoverable under ~/.pi/agent/agents (SETUP.md R5.8)");
 
-  if (!isChildSession(env)) {
+  // Subagents run in panes, so their tools are only expected in the harness
+  // environment. Requiring them in a standalone session would flag a bare
+  // `pi -p` as broken.
+  if (!harness.inHerdr) {
+    // Standalone: no panes to spawn into, nothing to require.
+  } else if (isChildSession(env)) {
+    working.push("child session detected; spawning-tool availability intentionally not required");
+  } else {
     const available = new Set(options.availableTools ?? []);
     const requiredTools = ["subagent", "subagent_interrupt", "subagent_resume", "subagents_list"];
     const missingTools = requiredTools.filter((tool) => !available.has(tool));
     if (missingTools.length === 0) working.push("subagent lifecycle tools available");
     else issues.push(`subagent lifecycle tools unavailable: ${missingTools.join(", ")} — verify pi-herdr-subagents in a fresh Pi session`);
-  } else {
-    working.push("child session detected; spawning-tool availability intentionally not required");
   }
 
   let message: string | null = null;

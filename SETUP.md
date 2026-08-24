@@ -182,8 +182,15 @@ server restarts, its section is:
 pane_history = true
 ```
 
-Warn clearly before enabling it: terminal contents—including secrets printed in
-a pane—are persisted in `session-history.json`.
+Before enabling it, tell the human what it stores: every pane's visible screen,
+as raw ANSI, in plaintext `session-history.json` (mode `0640`).
+
+State the tradeoff accurately rather than as a warning. For a **Pi pane** this is
+not a new exposure: Pi's own session `.jsonl` already records every command and
+its full output verbatim, in the same mode, in the same home directory. The one
+case with no equivalent record is a **non-Pi pane** — a plain shell where someone
+prints a key or dumps an environment has no session file, so pane history would
+be the only place that lands.
 
 Toast delivery is optional and defaults off. `delivery = "terminal"` asks the
 **outer terminal application to show a desktop notification**; it does not print
@@ -229,9 +236,26 @@ pi remove npm:pi-herdr-subagents
 pi install git:github.com/lrhodin/pi-herdr-subagents@e0eae2bebf6abf7d454b0f1ca20a6de0f35558fc
 ```
 
-`npm:@ogulcancelik/pi-herdr` is **optional**. Install it only when the human wants
-its structured `herdr_layout`, `herdr_pane`, and `herdr_agent` tools. Snorrio’s
-setup and diagnostics must not require it.
+**Why a pin and not a moving ref.** Pinned refs are not advanced by
+`pi update --extensions` or `pi update --all`, so the subagent layer cannot change
+under the human without a deliberate bump. That matters more here than elsewhere:
+this layer decides how work is delegated and how much a child is permitted to do,
+so a silent change can alter tool policy, lifecycle, or exit behavior mid-session.
+Upgrade it as its own decision — read the diff, move the pin with
+`pi install git:…@<new-sha>`, then verify `subagents_list` in a fresh session.
+
+**Know what reconciliation costs.** When pi moves a pinned clone to a new ref it
+**resets and cleans** the checkout. Uncommitted work anywhere under
+`~/.pi/agent/git/` is destroyed without warning, including in unrelated packages.
+Commit before running any `pi update` or `pi install`, and never treat a
+pi-managed clone as a working directory.
+
+`npm:@ogulcancelik/pi-herdr` is **optional**, and also worth pinning when used
+(`npm:@ogulcancelik/pi-herdr@0.4.0`). It supplies structured `herdr_layout`,
+`herdr_pane`, and `herdr_agent` tools; Snorrio's setup and diagnostics must not
+require it. Herdr 0.8.2 ships an equivalent in prose (`herdr --skill`), which an
+agent can follow by calling the `herdr` CLI directly — so treat the package as
+ergonomics for typed tool calls, not as a dependency.
 
 Never install `pi-herdr-agents`: it collides with the required fork at the
 extension/tool surface.
@@ -305,10 +329,35 @@ The `dmn-context` extension runs subprocess-heavy setup checks once on
 `session_start` and injects that cached diagnosis on later turns. It refreshes
 the cheap local date references and temporal cache reads on every
 `before_agent_start`, so long-lived Herdr panes cross midnight and see newly
-written caches. It diagnoses missing Herdr runtime IDs, invalid config, explicit
+written caches. It diagnoses invalid config, explicit
 `resume_agents_on_restore = false`, required tools, and definition discovery.
 Child sessions intentionally denied spawning tools do not receive false tool
 warnings.
+
+## 9. Two environments, not one broken one
+
+Pi runs in two shapes, and both are complete.
+
+**Inside a Herdr pane** (`HERDR_ENV=1` with all four runtime IDs) the harness is
+available: panes, agents, subagents, resume. Harness instructions apply and the
+setup check diagnoses the whole stack.
+
+**Standalone** — a bare `pi` in an ordinary shell, a `pi -p` one-shot, a scripted
+or CI invocation — has no panes and no server. This is **not a misconfiguration**
+and must never be reported as one. There is nothing for the human to repair.
+
+So the rule runs in one direction only: **harness-specific guidance must not
+reach a session that cannot act on it.** Instructions about driving panes,
+spawning subagents, or waiting on agent lifecycle are only true inside a pane;
+elsewhere they describe tools that do not exist and invite an agent to attempt
+them. Herdr's own bundled skill takes the same position — it declares `Requires
+HERDR_ENV=1` and tells the agent to stop if the check fails.
+
+The setup check therefore reports the environment as a fact, scopes every harness
+check to the harness environment, and keeps issues for things that are genuinely
+wrong — including a broken harness *inside* a pane, which is still an issue and
+is never downgraded. When adding context, a skill, or an instruction that assumes
+panes, gate it on the environment rather than emitting it unconditionally.
 
 Report what was already present, what changed, and any remaining issue. No
 episodes yet is normal; the first appears after the first session becomes idle.
