@@ -6,6 +6,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { platform as osPlatform } from "node:os";
+import { journalHead, readTzJournal, sameZone, tzJournalPath } from "./tz-journal.ts";
 
 export interface ParsedToml {
   values: Map<string, string>;
@@ -39,6 +40,8 @@ export interface SetupCheckOptions {
   platform?: NodeJS.Platform;
   availableTools?: string[];
   commandRunner?: CommandRunner;
+  /** The host zone. Injected in tests; defaults to the runtime's resolved zone. */
+  systemZone?: string;
 }
 
 export interface SessionSetupCache {
@@ -124,6 +127,51 @@ function hasCacheWithoutProvenance(cacheDir: string): boolean {
     } catch {}
   }
   return false;
+}
+
+export interface TimezoneJournalCheck {
+  /** Reported as `working`; null when there is something to say instead. */
+  working: string | null;
+  /** Reported as an issue — either drift or an unreadable journal. */
+  issue: string | null;
+}
+
+/**
+ * Compare the system zone against the journal head, and NUDGE.
+ *
+ * Deliberately not an auto-append. An append-only journal is only trustworthy if
+ * every entry was a decision: a cron job with a bare environment, a container
+ * default, or a stray `TZ=` in a unit file would each look exactly like a move,
+ * and would write an era that then silently reinterprets which day every
+ * subsequent episode lands in. That poisoning is permanent (append-only) and
+ * invisible (no one reads a journal that maintains itself). One line naming both
+ * zones plus the exact one-command fix fails honest instead.
+ */
+export function checkTimezoneJournal(snorrioHome: string, systemZone: string): TimezoneJournalCheck {
+  const path = tzJournalPath(snorrioHome);
+  let entries;
+  try {
+    entries = readTzJournal(path);
+  } catch (err: any) {
+    return {
+      working: null,
+      issue: `timezone journal is unreadable (${err?.message ?? err}) — episode day buckets fall back to the system zone until ${path} is repaired by hand`,
+    };
+  }
+  const head = journalHead(entries);
+  if (!head) {
+    return {
+      working: null,
+      issue: `no timezone journal yet — run \`snorrio tz set ${systemZone}\` so an episode's day is recorded against a zone we chose rather than whatever the host reports`,
+    };
+  }
+  if (!sameZone(head.tz, systemZone)) {
+    return {
+      working: null,
+      issue: `timezone drift: the system zone is ${systemZone} but the journal head is ${head.tz} (since ${head.from}) — if this machine moved, run \`snorrio tz set ${systemZone}\`; snorrio never follows the system zone on its own`,
+    };
+  }
+  return { working: `timezone journal current (${head.tz} since ${head.from})`, issue: null };
 }
 
 function parseBoolean(raw: string | undefined): boolean | null {
@@ -230,6 +278,13 @@ export function runSetupChecks(options: SetupCheckOptions): SetupCheckResult {
   } else if (markerExists) {
     working.push("provenance migration v1 recorded");
   }
+
+  const timezone = checkTimezoneJournal(
+    snorrioHome,
+    options.systemZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone ?? "UTC",
+  );
+  if (timezone.issue) issues.push(timezone.issue);
+  if (timezone.working) working.push(timezone.working);
 
   const missingClis = ["recall", "snorrio", "llm"].filter((cli) => !executable(cli));
   if (missingClis.length === 0) working.push("CLIs on PATH");

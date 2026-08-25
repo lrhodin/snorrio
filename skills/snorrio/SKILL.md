@@ -99,7 +99,8 @@ Snorrio installs as a pi package. Skills and extensions are auto-discovered.
   cache/                           # temporal summaries
   logs/                            # daemon logs
   config/
-    config.json                    # model preferences, timezone
+    config.json                    # model preferences, timezone fallback
+    tz-history.jsonl               # append-only journal of timezone transitions
 ```
 
 ## Setup

@@ -8,6 +8,7 @@
 //   snorrio status                   Show daemon and system status
 //   snorrio migrate-provenance       Add metadata/manifests and recascade affected dates
 //   snorrio migrate-local-dates      Stamp the local_date bucketing key onto existing episodes
+//   snorrio tz [set <zone>]          Show or append to the timezone journal
 //   snorrio update                   Pull latest and restart daemon
 
 import { existsSync, statSync, writeFileSync, openSync, readSync, closeSync } from "fs";
@@ -69,6 +70,24 @@ const USAGE = {
     "  'assumed' — the era is reconstructed, not observed per episode.",
     "  Idempotent: a second run changes nothing.",
   ].join("\n"),
+  tz: [
+    "Usage: snorrio tz [set <IANA-zone>]",
+    "  snorrio tz               Show the zone in effect and recent transitions.",
+    "  snorrio tz set <zone>    Record a move: append a transition effective now.",
+    "",
+    "  The journal (config/tz-history.jsonl) is append-only: each entry says",
+    "  which zone took effect at which UTC instant, so an instant months ago",
+    "  still resolves to the zone that was in effect then. Episodes already",
+    "  written keep the zone frozen into their frontmatter; `set` only affects",
+    "  instants after it.",
+    "",
+    "  IANA names only (America/Los_Angeles, Europe/Stockholm) — a fixed offset",
+    "  is rejected because it goes wrong at the next DST transition.",
+    "",
+    "  snorrio never follows the system zone on its own: a stray TZ= in a unit",
+    "  file or a container default would poison an append-only journal",
+    "  permanently. A mismatch is reported at session start; you run this once.",
+  ].join("\n"),
   update: "Usage: snorrio update\n  Pull latest and restart the daemon.",
 };
 
@@ -80,6 +99,10 @@ const FLAG_SPECS = {
   status: { allowed: [] },
   "migrate-provenance": { allowed: ["--dry-run"] },
   "migrate-local-dates": { allowed: ["--dry-run", "--confirm"] },
+  // `tz set <zone>` writes, so it takes no flags at all: there is nothing an
+  // unrecognized one could mean, and reading it as consent is the 2026-08-24
+  // incident. Positionals are the subcommand and the zone.
+  tz: { allowed: [], positionals: 2 },
   update: { allowed: [] },
 };
 
@@ -217,6 +240,7 @@ Commands:
   status                        Show daemon and system status
   migrate-provenance [--dry-run] Add episode lineage metadata, cache manifests, and recascade affected dates
   migrate-local-dates [--confirm] Stamp the local_date bucketing key onto existing episodes (dry-run by default)
+  tz [set <IANA-zone>]          Show the timezone journal, or record a move
   update                        Pull latest and restart daemon
 
 Reprocess ranges: YYYY-MM-DD | YYYY-Www | YYYY-MM | YYYY-QN | YYYY
@@ -356,6 +380,29 @@ if (cmd === "flush") {
   } catch {
     process.exit(1);
   }
+
+} else if (cmd === "tz") {
+  const { tzSet, tzShow } = await import("../src/tz-command.ts");
+  const [action, zone, ...rest] = cmdArgs;
+  if (rest.length) {
+    console.error(USAGE.tz);
+    process.exit(2);
+  }
+  let result;
+  if (action === undefined || action === "show" || action === "list") {
+    result = tzShow({ snorrioHome: SNORRIO_HOME });
+  } else if (action === "set") {
+    if (!zone) {
+      console.error("Usage: snorrio tz set <IANA-zone>\nNo zone given; refusing to guess one.");
+      process.exit(2);
+    }
+    result = tzSet(zone, { snorrioHome: SNORRIO_HOME });
+  } else {
+    console.error(`Unknown tz action: ${action}\n${USAGE.tz}`);
+    process.exit(2);
+  }
+  console.log(result.output);
+  process.exit(result.exitCode);
 
 } else if (cmd === "status") {
   // Daemon

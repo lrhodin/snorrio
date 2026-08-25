@@ -6,6 +6,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
 import { createSessionSetupCache, runSetupChecks } from "../src/setup-checks.ts";
+import { createZoneResolver, tzJournalPath } from "../src/tz-journal.ts";
 
 const HOME = process.env.HOME!;
 const PKG_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -52,10 +53,24 @@ function formatGap(ms: number): string {
 // once described as aligned with that timer; it never needed to be.
 export const GAP_MS = 4.5 * 60 * 1000; // 4:30
 
-// Pure transform: mutates `messages` in place, prefixing user/assistant
-// messages with timestamps and silence markers per the rules described on
-// the `context` handler below. Exported for testing.
-export function applyStamps(messages: any[], tz: string, gapThresholdMs: number = GAP_MS): void {
+/**
+ * Pure transform: mutates `messages` in place, prefixing user/assistant
+ * messages with timestamps and silence markers per the rules described on the
+ * `context` handler below. Exported for testing.
+ *
+ * `zoneFor` is asked per message rather than a single `tz` being resolved once
+ * for the session, because a stamp is a claim about when a message was written,
+ * not about where the reader is. A session recorded in Stockholm must keep
+ * rendering in CEST when it is read back from California; resolving one zone up
+ * front reprints the whole transcript in today's zone. It stays an injected
+ * function so this transform reaches for no global state and the tests can drive
+ * an era boundary directly.
+ */
+export function applyStamps(
+  messages: any[],
+  zoneFor: (timestamp: number) => string,
+  gapThresholdMs: number = GAP_MS,
+): void {
   const userIndices: number[] = [];
   for (let i = 0; i < messages.length; i++) {
     if (messages[i].role === "user" && messages[i].timestamp) {
@@ -84,7 +99,7 @@ export function applyStamps(messages: any[], tz: string, gapThresholdMs: number 
   for (const idx of stampSet) {
     const msg = messages[idx];
     if (msg.role !== "user" && msg.role !== "assistant") continue;
-    const stamp = formatStamp(msg.timestamp, tz);
+    const stamp = formatStamp(msg.timestamp, zoneFor(msg.timestamp));
     const gap = gapBefore.get(idx);
     const prefix = gap
       ? `[${formatGap(gap)} of silence]\n[${stamp}] `
@@ -111,7 +126,13 @@ export function composeInjectedPrompt(base: string, today: string, setupMessage:
 }
 
 export default function (pi: ExtensionAPI) {
-  const tz = getTimezone();
+  // Per-instant, and re-read when the journal changes: a Herdr pane can outlive
+  // a `snorrio tz set`, and a resumed session's transcript spans eras.
+  const resolveZoneFor = createZoneResolver({
+    path: tzJournalPath(SNORRIO_HOME),
+    fallbackZone: getTimezone,
+  });
+  const zoneFor = (timestamp: number) => resolveZoneFor(timestamp).tz;
   const setup = createSessionSetupCache(() => runSetupChecks({
     home: HOME,
     packageRoot: PKG_ROOT,
@@ -141,7 +162,7 @@ export default function (pi: ExtensionAPI) {
   // - Always stamp first and last user messages
   // - On gaps >= 4:30: stamp both sides and insert a silence marker
   pi.on("context", (event) => {
-    applyStamps(event.messages as any[], tz, GAP_MS);
+    applyStamps(event.messages as any[], zoneFor, GAP_MS);
     return { messages: event.messages };
   });
 }

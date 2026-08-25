@@ -68,7 +68,32 @@ Create `config/config.json` only if absent:
 { "model": "opus", "timezone": null, "tools": {} }
 ```
 
-`timezone: null` uses the system timezone.
+`timezone: null` is the fallback only, used when no timezone journal exists yet.
+
+### R2.3 — the timezone journal records this machine's zone
+
+```sh
+snorrio tz                          # what is in effect, and recent transitions
+snorrio tz set America/Los_Angeles  # record a move, effective now
+```
+
+`config/tz-history.jsonl` is append-only, one entry per line: `from` (a UTC
+instant) and `tz` (an IANA name). An entry is in effect from `from` until the next
+entry, so an instant months ago still resolves to the zone that was in effect
+then. That is what an episode's frozen `local_date` is stamped against.
+
+Run `snorrio tz set <zone>` once, with the zone this machine is actually in. Two
+things are deliberate:
+
+- **IANA names only.** A fixed offset is a fact about one instant and goes wrong
+  at the next DST transition; a name lets the tz database answer.
+- **snorrio never follows the system zone.** A cron job, a container default, or a
+  stray `TZ=` in a unit file would each look exactly like a move and would write
+  an era that permanently and invisibly reinterprets which day later episodes land
+  in. A mismatch is reported at session start; you run one command.
+
+Changing the system timezone is a separate act and does not require touching
+history: episodes already written keep the zone frozen into their frontmatter.
 
 ## 3. CLIs
 

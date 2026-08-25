@@ -7,7 +7,9 @@
 //   2. Failure to narrow inside the array-content branch — only `text` blocks
 //      should receive the prefix; non-text blocks must not be mutated.
 //
-// All fixtures use Date.UTC() and tz="UTC" so the snapshot is wall-clock-stable.
+// All fixtures use Date.UTC() and a constant "UTC" resolver so the snapshot is
+// wall-clock-stable. The resolver is a function, not a zone string, because a
+// stamp names when a message was written: see the era-boundary test at the end.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -36,7 +38,7 @@ test("steady cadence — first and last stamped, no silence markers", () => {
     { role: "user", content: "two",   timestamp: T0 + 30_000 },
     { role: "user", content: "three", timestamp: T0 + 60_000 },
   ];
-  applyStamps(msgs, TZ);
+  applyStamps(msgs, () => TZ);
 
   assert.equal(msgs[0].content, `[${STAMP_T0}] one`);
   // middle message: not first, not last, no gap → untouched
@@ -56,7 +58,7 @@ test("long gap — silence marker prefixed on the post-gap message", () => {
     { role: "user", content: "before", timestamp: T0 },
     { role: "user", content: "after",  timestamp: T0 + gap },
   ];
-  applyStamps(msgs, TZ);
+  applyStamps(msgs, () => TZ);
 
   assert.equal(msgs[0].content, `[${STAMP_T0}] before`);
   assert.equal(
@@ -91,7 +93,7 @@ test("mixed shapes — bashExecution does not crash and does not get stamped", (
   ];
 
   // Must not throw.
-  applyStamps(msgs, TZ);
+  applyStamps(msgs, () => TZ);
 
   // bashExecution untouched
   assert.equal(msgs[1].role, "bashExecution");
@@ -125,7 +127,7 @@ test("array content — prefix prepended to FIRST text block only; non-text unto
     // a single stamp, no silence marker on it.
     { role: "user", content: "tail", timestamp: T0 + 30 * 60 * 1000 },
   ];
-  applyStamps(msgs, TZ);
+  applyStamps(msgs, () => TZ);
 
   const blocks = msgs[0].content;
   // image block untouched
@@ -143,4 +145,26 @@ test("array content — prefix prepended to FIRST text block only; non-text unto
     msgs[1].content,
     `[30 minutes of silence]\n[Sat, May 2, 3:00 PM UTC] tail`,
   );
+});
+
+test("each stamp renders in the zone the message was written in, not the reader's", () => {
+  // The bug this replaces: the extension resolved ONE zone in its default export
+  // and stamped every message with it, so reopening a Stockholm session from
+  // California reprinted the whole transcript in Pacific. A stamp is a claim
+  // about when a message was written; that claim does not change when the reader
+  // moves. Here the journal head is Pacific and the older messages are Stockholm
+  // era — they must still say CEST.
+  const stockholmEra = Date.UTC(2026, 8, 2, 20, 0, 0); // 2026-09-02 22:00 CEST
+  const pacificEra = Date.UTC(2026, 8, 10, 20, 0, 0);  // 2026-09-10 13:00 PDT
+  const boundary = Date.UTC(2026, 8, 5, 0, 0, 0);
+  const zoneFor = (ts: number) => (ts < boundary ? "Europe/Stockholm" : "America/Los_Angeles");
+
+  const msgs: any[] = [
+    { role: "user", content: "packing", timestamp: stockholmEra },
+    { role: "user", content: "landed",  timestamp: pacificEra },
+  ];
+  applyStamps(msgs, zoneFor);
+
+  assert.equal(msgs[0].content, "[Wed, Sep 2, 10:00 PM GMT+2] packing");
+  assert.match(msgs[1].content, /^\[8 days of silence\]\n\[Thu, Sep 10, 1:00 PM PDT\] landed$/);
 });

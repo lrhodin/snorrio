@@ -46,6 +46,7 @@ import { findStaleSessions } from "./stale-sessions.ts";
 import { buildEpisodeIndex } from "./episode-index.ts";
 import { monthDates, monthWeeks, quarterMonths, weekDates, yearQuarters } from "./date-ranges.ts";
 import { resolveLocalDate, resolveUtcOffset } from "./local-date.ts";
+import { createZoneResolver, tzJournalPath } from "./tz-journal.ts";
 import {
   sessionIdFromEntries,
   sessionTimestamps as metaTimestamps,
@@ -117,7 +118,21 @@ const CACHE_DIR = join(SNORRIO_HOME, "cache");
 // `snorrio flush` cancels every pending timer and reconciles against disk, so
 // that wait is always skippable on demand.
 const DEBOUNCE_MS = 3_300_000; // 55 minutes — just inside the 1h prompt cache
-const TZ = getTimezone();
+
+// Which zone an instant belongs to is asked PER INSTANT, from the journal.
+//
+// This was `const TZ = getTimezone()` at module load, which is two bugs in one
+// line. The first is temporal: it answers "where is this machine now?" and then
+// applies that answer to every timestamp it is ever handed, so a sweep that
+// generates a July episode in October buckets it in October's zone. The second
+// is lifetime: a daemon that has been up for weeks never observes a zone change
+// at all until it is restarted. A resolver keyed on the instant fixes both, and
+// re-reads the journal when it changes on disk.
+const resolveZoneFor = createZoneResolver({
+  path: tzJournalPath(SNORRIO_HOME),
+  fallbackZone: getTimezone,
+  onError: (message) => log(`WARNING: ${message}`),
+});
 
 function getMachine() {
   try {
@@ -149,16 +164,21 @@ function lineageForSession(sourcePath: string, sessionId: string): SessionLineag
   };
 }
 
-// The bucketing key, resolved once at generation time and then frozen into the
-// episode. `tz_source` is "system" because this is the machine's configured or
-// host zone as observed now — not a claim recovered from the session itself.
+// The bucketing key, resolved at generation time for the SESSION'S instant and
+// then frozen into the episode.
+//
+// `tz_source` reports who answered: "journal" when an era covered the instant,
+// "assumed" when the instant precedes the journal and its earliest era was
+// extended backwards, "system" when there is no journal at all. The distinction
+// is the point — an inferred zone must not be recorded as an observed one.
 function localDateFor(timestamp: string): EpisodeLocalDate {
   const instant = new Date(timestamp);
+  const zone = resolveZoneFor(instant);
   return {
-    localDate: resolveLocalDate(instant, TZ).date,
-    tz: TZ,
-    utcOffset: resolveUtcOffset(instant, TZ),
-    tzSource: "system",
+    localDate: resolveLocalDate(instant, zone.tz).date,
+    tz: zone.tz,
+    utcOffset: resolveUtcOffset(instant, zone.tz),
+    tzSource: zone.source,
   };
 }
 
@@ -194,10 +214,11 @@ function log(msg: string) {
 // SESSION HELPERS
 // ============================================================================
 
+// The day directory an instant belongs to, in the zone that was in effect AT
+// that instant. Must agree with localDateFor() — same resolver, same instant.
 function toDateStr(iso: string) {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit",
-  }).format(new Date(iso));
+  const instant = new Date(iso);
+  return resolveLocalDate(instant, resolveZoneFor(instant).tz).date;
 }
 
 // Parse pi session entries — only used for pi sessions that need buildSessionContext
@@ -218,6 +239,26 @@ function parsePiSession(filePath: string) {
 const EPISODE_SYSTEM = `You write journal entries from coding agent sessions. An entry captures both what was done and what was discussed — the actions, the reasoning, the intent behind them. Include concrete details where they matter: files changed, commands run, decisions made. But equally capture the conversation: what ideas came up, what got debated, what the human cared about, what the tone and energy was. Note session IDs of related sessions when referenced.`;
 
 const EPISODE_PROMPT = "Write a journal entry for this session.\n\nRespond in plain text. Do not call any tools.";
+
+// A day whose summary was already written just gained a new episode.
+//
+// This is legitimate and the cascade already handles it — validateCaches()
+// compares episode mtimes against the day cache and cacheManifestNeedsRefresh()
+// diffs the provenance manifest, so the day and everything above it rebuild. No
+// redesign needed. It is worth a log line because day buckets stop being
+// monotonic the moment you travel west: Stockholm 22:00Z buckets to Sep 2, then
+// a flight, and LA 02:00Z — four hours LATER in absolute time — buckets to
+// Sep 1. (Eastward travel just skips a date, which is harmless: the cascade only
+// walks days that have episodes.)
+//
+// The same log line is also what a WRONGLY set journal looks like, which is the
+// real reason to emit it: if days start reopening without anyone travelling, the
+// zone in effect is not the zone the machine is in.
+function noteReopenedDay(dateStr: string, epPath: string, id: string) {
+  if (existsSync(epPath)) return; // regeneration of a known episode, not a reopen
+  if (!existsSync(join(CACHE_DIR, "days", `${dateStr}.md`))) return;
+  log(`  Reopened day ${dateStr}: episode ${id.slice(0, 8)} landed after its day summary was written — cascade will rebuild it. Expected after travelling west; otherwise check \`snorrio tz\`.`);
+}
 
 async function generateEpisode(filePath: string) {
   const id = sessionIdFromEntries(filePath);
@@ -272,6 +313,7 @@ async function generateEpisode(filePath: string) {
   const dir = join(EPISODES_DIR, dateStr);
   mkdirSync(dir, { recursive: true });
   const epPath = join(dir, `${id}.md`);
+  noteReopenedDay(dateStr, epPath, id);
   atomicWrite(epPath, fm + text);
 
   log(`  Done: ${id.slice(0, 8)} → ${text.length} chars`);

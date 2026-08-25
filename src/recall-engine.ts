@@ -25,6 +25,7 @@ import { resolveSession, sessionIdFromEntries, type SessionInfo } from "./sessio
 import { resolveShaAt, readFileAtSha } from "./versioned-read.ts";
 import { getSessionLineageIndex, resolveLineageSession } from "./session-lineage.ts";
 import { temporalRefs } from "./local-date.ts";
+import { createZoneResolver, tzJournalPath } from "./tz-journal.ts";
 import { monthWeeks, quarterMonths, weekDates, yearQuarters } from "./date-ranges.ts";
 import { ensureCacheProvenanceManifest, formatManifestForPrompt, writeCacheWithProvenance, type CacheLevel, type CacheProvenanceManifest } from "./cache-provenance.ts";
 
@@ -92,12 +93,22 @@ function extractTimestamp(sessionFile: string): Date | null {
   return new Date(`${y}-${mo}-${d}T${h}:${mi}:${s}.${ms}Z`);
 }
 
+// Which zone a PAST instant belongs to, from the journal. The whole point of
+// this function is "what was happening when this session ran", so asking today's
+// zone where a July session's day boundary fell would load the wrong day cache
+// for any session recorded in a different era.
+const resolveZoneFor = createZoneResolver({
+  path: tzJournalPath(SNORRIO_HOME),
+  fallbackZone: getTimezone,
+  onError: (message) => process.stderr.write(`[snorrio:recall] WARNING: ${message}\n`),
+});
+
 function loadTemporalContext(timestamp: Date): string {
   // Shared Intl-based resolution (src/local-date.ts). Was a format-then-reparse
   // round-trip through toLocaleString("en-US") plus its own ISO week formula,
   // which disagreed with cascade-decision.ts dateToWeek() in 53-week years and
   // so could load a neighbouring week's cache as "that week".
-  const { today, week, month, quarter, year } = temporalRefs(timestamp, getTimezone());
+  const { today, week, month, quarter, year } = temporalRefs(timestamp, resolveZoneFor(timestamp).tz);
 
   function readCache(level: string, key: string): string | null {
     try {

@@ -71,12 +71,15 @@ function setupFixture() {
   const snorrioHome = join(home, "snorrio");
   for (const dir of ["episodes", "cache/days", "cache/weeks", "cache/months", "cache/quarters", "cache/years", "logs", "config"]) mkdirSync(join(snorrioHome, dir), { recursive: true });
   writeFileSync(join(snorrioHome, "config/config.json"), "{}");
+  // A journal agreeing with `systemZone` below, so a healthy fixture stays
+  // healthy: an absent or drifted journal is a real issue and has its own tests.
+  writeFileSync(join(snorrioHome, "config/tz-history.jsonl"), '{"from":"2026-07-17T00:00:00Z","tz":"Etc/UTC"}\n');
   mkdirSync(join(home, ".pi/agent/agents"), { recursive: true });
   writeFileSync(join(home, ".pi/agent/agents/recall-digger.md"), "---\nname: recall-digger\n---\n");
   writeFileSync(join(home, ".pi/agent/settings.json"), JSON.stringify({
     packages: ["https://github.com/lrhodin/snorrio", REQUIRED_SUBAGENT_PACKAGE_SOURCE],
   }));
-  return { home, snorrioHome };
+  return { home, snorrioHome, systemZone: "Etc/UTC" };
 }
 
 function healthyRunner(serviceOverride?: string): CommandRunner {
@@ -235,6 +238,32 @@ test("standalone Pi reports zero issues and no harness guidance; a Herdr pane is
     assert.ok(inPane.working.some(w => /Herdr pane/.test(w)));
     assert.ok(inPane.issues.some(i => /subagent lifecycle tools unavailable/.test(i)),
       "a pane session with no subagent tools is genuinely misconfigured");
+  } finally { rmSync(fixture.home, { recursive: true, force: true }); }
+});
+
+test("timezone drift is reported at session start, and never fixed by writing", () => {
+  const fixture = setupFixture();
+  try {
+    const journal = join(fixture.snorrioHome, "config/tz-history.jsonl");
+    const before = readFileSync(journal, "utf8");
+    const common = {
+      ...fixture, packageRoot: join(fixture.home, "pkg"), platform: "darwin" as const,
+      commandRunner: healthyRunner(), env: runtimeEnv(),
+      availableTools: ["subagent", "subagent_interrupt", "subagent_resume", "subagents_list"],
+    };
+
+    const agreed = runSetupChecks(common);
+    assert.equal(agreed.issues.length, 0, agreed.issues.join("\n"));
+    assert.ok(agreed.working.some(w => /timezone journal current \(Etc\/UTC/.test(w)));
+
+    // The box moved to Pacific but nobody recorded it. One line, both zones
+    // named, and the exact command — NOT a silent append, because a stray TZ= in
+    // a unit file or a container default would look identical and would poison
+    // an append-only journal permanently.
+    const drifted = runSetupChecks({ ...common, systemZone: "America/Los_Angeles" });
+    assert.ok(drifted.issues.some(i => /timezone drift/.test(i)), drifted.issues.join("\n"));
+    assert.ok(drifted.issues.some(i => /snorrio tz set America\/Los_Angeles/.test(i)));
+    assert.equal(readFileSync(journal, "utf8"), before, "a check must not write");
   } finally { rmSync(fixture.home, { recursive: true, force: true }); }
 });
 

@@ -11,6 +11,7 @@ import { readFileSync } from "fs";
 import { join } from "path";
 import { SNORRIO_HOME, CONFIG_PATH } from "./ai.ts";
 import { temporalRefs } from "./local-date.ts";
+import { createZoneResolver, tzJournalPath } from "./tz-journal.ts";
 
 const CACHE_DIR = join(SNORRIO_HOME, "cache");
 
@@ -25,6 +26,16 @@ function readFile(filePath: string): string | null {
 function readCache(level: string, key: string): string | null {
   return readFile(join(CACHE_DIR, level, `${key}.md`));
 }
+
+// The journal answers first; config.timezone and the host zone are the fallback
+// for a machine that has never recorded a transition. Routed through the same
+// resolver as episode generation so "today" here and the day directory the
+// daemon writes cannot disagree — they are the same question about the same
+// instant.
+const resolveZoneFor = createZoneResolver({
+  path: tzJournalPath(SNORRIO_HOME),
+  fallbackZone: loadTimezone,
+});
 
 function loadTimezone(): string {
   try {
@@ -44,7 +55,8 @@ function loadTimezone(): string {
 // Intl-based resolution in src/local-date.ts, which derives week/month/quarter
 // from the resolved Y/M/D instead of from a reparsed Date.
 export function getDateRefs() {
-  return temporalRefs(new Date(), loadTimezone());
+  const now = new Date();
+  return temporalRefs(now, resolveZoneFor(now).tz);
 }
 
 /**
