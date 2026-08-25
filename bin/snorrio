@@ -11,19 +11,49 @@
 //   snorrio tz [set <zone>]          Show or append to the timezone journal
 //   snorrio update                   Pull latest and restart daemon
 
-import { existsSync, statSync, writeFileSync, openSync, readSync, closeSync } from "fs";
+import { existsSync, statSync, writeFileSync, readFileSync, openSync, readSync, closeSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { execSync, execFileSync } from "child_process";
 import { platform } from "os";
 import { checkSubcommandArgs } from "../src/cli-args.ts";
+import { dailyLogPath } from "../src/log-file.ts";
+import { resolveLocalDate } from "../src/local-date.ts";
+import { createZoneResolver, tzJournalPath } from "../src/tz-journal.ts";
 
 const HOME = process.env.HOME;
 const PKG_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SNORRIO_HOME = process.env.SNORRIO_HOME || join(HOME, "snorrio");
 const CONFIG_PATH = join(SNORRIO_HOME, "config", "config.json");
-const LOG_DIR = join(SNORRIO_HOME, "logs");
 const FLUSH_TRIGGER = join(SNORRIO_HOME, "flush");
+
+// "Which day is this instant in?", asked the way every other caller asks it.
+//
+// This CLI deliberately does not load src/episode-daemon.ts or src/ai.ts — the
+// point of a thin CLI is that tailing a log or printing status does not drag in
+// the watcher and the LLM surface. src/tz-journal.ts and src/local-date.ts are
+// dependency-free enough to import directly, so "same answer" costs one resolver
+// rather than a module graph.
+//
+// The fallback matches the daemon's (src/ai.ts getTimezone): config.timezone if a
+// machine still sets it, then the host zone. A CLI that fell straight through to
+// the host zone would name a different file than the daemon on exactly those
+// machines. Journal errors are silent here because `snorrio status` and the
+// session setup checks are where they get reported with something to do about it.
+const resolveZoneFor = createZoneResolver({
+  path: tzJournalPath(SNORRIO_HOME),
+  fallbackZone: () => {
+    try {
+      return JSON.parse(readFileSync(CONFIG_PATH, "utf8")).timezone
+        || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+    } catch {
+      return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+    }
+  },
+});
+
+/** Local date of `instant`, per the journal. The bucketing key, for display. */
+const localDateOf = (instant) => resolveLocalDate(instant, resolveZoneFor(instant).tz).date;
 
 const IS_MACOS = platform() === "darwin";
 const PLIST_PATH = join(HOME, "Library", "LaunchAgents", "io.snorrio.dmn.plist");
@@ -251,8 +281,12 @@ Reprocess depths: episode (default) | day | week | month | quarter`);
 if (cmd === "flush") {
   writeFileSync(FLUSH_TRIGGER, new Date().toISOString());
 
-  const today = new Date().toISOString().slice(0, 10);
-  const logFile = join(LOG_DIR, `${today}.log`);
+  // Same file the daemon is appending to, named by the same function over the
+  // same journal. These two are coupled by construction: this loop tails that
+  // file, so a name computed a second way does not produce a wrong filename, it
+  // produces a hang — the spinner watches a file nobody writes until the
+  // 5-minute timeout. Which is what a UTC-named log did here after 17:00 PDT.
+  const logFile = dailyLogPath(SNORRIO_HOME, new Date(), resolveZoneFor);
 
   let logOffset = 0;
   try { logOffset = statSync(logFile).size; } catch {}
@@ -428,7 +462,11 @@ if (cmd === "flush") {
 
   // Episodes
   const episodesDir = join(SNORRIO_HOME, "episodes");
-  const today = new Date().toISOString().slice(0, 10);
+  // Same defect as the log filename, same fix: a UTC "today" reported 0 episodes
+  // today for the whole Pacific evening, because it was reading tomorrow's
+  // directory. The daemon writes an episode into the day directory its local_date
+  // names, so status has to ask the same question to count them.
+  const today = localDateOf(new Date());
   let todayCount = 0;
   let totalDays = 0;
   try {

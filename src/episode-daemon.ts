@@ -47,6 +47,7 @@ import { buildEpisodeIndex } from "./episode-index.ts";
 import { monthDates, monthWeeks, quarterMonths, weekDates, yearQuarters } from "./date-ranges.ts";
 import { resolveLocalDate, resolveUtcOffset } from "./local-date.ts";
 import { createZoneResolver, tzJournalPath } from "./tz-journal.ts";
+import { dailyLogPath, logsDir } from "./log-file.ts";
 import {
   sessionIdFromEntries,
   sessionTimestamps as metaTimestamps,
@@ -199,14 +200,30 @@ const inflight = new Set();
 
 
 
-const LOG_DIR = join(SNORRIO_HOME, "logs");
+const LOG_DIR = logsDir(SNORRIO_HOME);
 mkdirSync(LOG_DIR, { recursive: true });
+
+// The line's timestamp is UTC; the FILE it lands in buckets by local date.
+//
+// That split is deliberate. A line records an instant, and an instant should read
+// the same from anywhere — a bare wall-clock stamp is ambiguous exactly when a
+// recorded zone change makes you want to reread the log. A file-per-day is a
+// human's question ("what happened yesterday evening"), and a day is local: named
+// from a UTC date, every line after 17:00 PDT went into a file named for a day
+// that had not started yet. So don't "fix" the stamp to local time.
+//
+// src/log-file.ts owns the name because `snorrio flush` tails this exact file;
+// see there for why a disagreement is a hang rather than a wrong name.
+//
+// The resolver's onError calls back into log(), which resolves again — bounded,
+// because createZoneResolver records the journal signature and the reported
+// message before it calls out, so the re-entrant resolve short-circuits.
 function log(msg: string) {
-  const line = `[DMN] ${new Date().toISOString()} ${msg}\n`;
+  const now = new Date();
+  const line = `[DMN] ${now.toISOString()} ${msg}\n`;
   process.stderr.write(line);
   try {
-    const today = new Date().toISOString().slice(0, 10);
-    appendFileSync(join(LOG_DIR, `${today}.log`), line);
+    appendFileSync(dailyLogPath(SNORRIO_HOME, now, resolveZoneFor), line);
   } catch {}
 }
 
