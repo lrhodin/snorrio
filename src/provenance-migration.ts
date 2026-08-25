@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { atomicWriteFile } from "./atomic-write.ts";
 import { buildCacheProvenanceManifest, writeCacheProvenanceManifest, type CacheLevel } from "./cache-provenance.ts";
 import { defaultMachine, parseEpisodeFrontmatter, upsertEpisodeLineageMetadata } from "./episode-frontmatter.ts";
+import { HISTORICAL_TZ, HISTORICAL_TZ_SOURCE, HISTORICAL_UTC_OFFSET } from "./local-date-migration.ts";
 import type { SessionLineage, SessionLineageIndex } from "./session-lineage.ts";
 
 export interface ProvenanceMigrationResult {
@@ -135,6 +136,17 @@ export function migrateProvenanceMetadata(options: {
         sourcePath: lineage.sessionPath,
         home,
         timestamp: parsed.fields.get("timestamp")?.replace(/^"|"$/g, "") ?? `${date}T00:00:00Z`,
+        // Only reached for an episode with no frontmatter at all, where a whole
+        // block is generated. The bucket is the directory the file already sits
+        // in — never a recomputed date. An episode that already has frontmatter
+        // keeps whatever local_date it carries: upsertEpisodeLineageMetadata
+        // rewrites only the lineage keys.
+        localDate: {
+          localDate: date,
+          tz: HISTORICAL_TZ,
+          utcOffset: HISTORICAL_UTC_OFFSET,
+          tzSource: HISTORICAL_TZ_SOURCE,
+        },
       });
       if (migrated !== content) {
         episodesChanged++;

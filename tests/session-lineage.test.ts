@@ -262,6 +262,12 @@ test("episode frontmatter persists complete lineage metadata", () => {
       dependencySessionIds: ["parent"],
       issues: [],
     },
+    localDate: {
+      localDate: "2026-08-23",
+      tz: "America/Los_Angeles",
+      utcOffset: "-07:00",
+      tzSource: "system",
+    },
   });
 
   assert.match(fm, /^---\n/);
@@ -272,4 +278,8 @@ test("episode frontmatter persists complete lineage metadata", () => {
   assert.match(fm, /lineage_depth: 2/);
   assert.match(fm, /lineage_source: "header"/);
   assert.match(fm, /lineage_complete: true/);
+  assert.match(fm, /local_date: "2026-08-23"/);
+  assert.match(fm, /tz: "America\/Los_Angeles"/);
+  assert.match(fm, /utc_offset: "-07:00"/);
+  assert.match(fm, /tz_source: "system"/);
 });

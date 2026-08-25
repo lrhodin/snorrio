@@ -43,13 +43,17 @@ import { recall } from "./recall-engine.ts";
 import { withRetries } from "./retry.ts";
 import { decideCascade, dateToWeek, monthToQuarter, type CascadeLevel } from "./cascade-decision.ts";
 import { findStaleSessions } from "./stale-sessions.ts";
+import { buildEpisodeIndex } from "./episode-index.ts";
+import { monthDates, monthWeeks, quarterMonths, weekDates, yearQuarters } from "./date-ranges.ts";
+import { resolveLocalDate, resolveUtcOffset } from "./local-date.ts";
 import {
   sessionIdFromEntries,
   sessionTimestamps as metaTimestamps,
   allSessions as metaAllSessions, type SessionInfo,
 } from "./session-meta.ts";
 import { getSessionLineageIndex, type SessionLineage, type SessionLineageIndex } from "./session-lineage.ts";
-import { buildEpisodeFrontmatter, defaultMachine } from "./episode-frontmatter.ts";
+import { buildEpisodeFrontmatter, defaultMachine, type EpisodeLocalDate } from "./episode-frontmatter.ts";
+import { migrateEpisodeLocalDates } from "./local-date-migration.ts";
 import { cacheManifestNeedsRefresh, writeCacheWithProvenance, type CacheLevel } from "./cache-provenance.ts";
 import { migrateProvenanceMetadata, planProvenanceRecascade, writeProvenanceRecascadeMarker } from "./provenance-migration.ts";
 import { externalLineageSessionCandidates, lineageSessionCandidates } from "./session-candidates.ts";
@@ -145,6 +149,19 @@ function lineageForSession(sourcePath: string, sessionId: string): SessionLineag
   };
 }
 
+// The bucketing key, resolved once at generation time and then frozen into the
+// episode. `tz_source` is "system" because this is the machine's configured or
+// host zone as observed now — not a claim recovered from the session itself.
+function localDateFor(timestamp: string): EpisodeLocalDate {
+  const instant = new Date(timestamp);
+  return {
+    localDate: resolveLocalDate(instant, TZ).date,
+    tz: TZ,
+    utcOffset: resolveUtcOffset(instant, TZ),
+    tzSource: "system",
+  };
+}
+
 function buildFrontmatter(origin: string, sourcePath: string, timestamp: string, sessionId: string) {
   return buildEpisodeFrontmatter({
     origin,
@@ -153,6 +170,7 @@ function buildFrontmatter(origin: string, sourcePath: string, timestamp: string,
     home: HOME,
     timestamp,
     lineage: lineageForSession(sourcePath, sessionId),
+    localDate: localDateFor(timestamp),
   });
 }
 
@@ -531,7 +549,7 @@ function startExternalSessionReconciliation() {
     try {
       const index = getSessionLineageIndex(metaAllSessions());
       const external = externalLineageSessionCandidates(index, PI_SESSIONS_DIR);
-      const { stale } = findStaleSessions(external, EPISODES_DIR, dateOfSession);
+      const { stale } = findStaleSessions(external, EPISODES_DIR);
       for (const session of stale.slice(0, 32)) onSessionChange(session.path);
       if (stale.length > 32) log(`External reconciliation bounded: scheduled 32/${stale.length}`);
     } catch (err: any) {
@@ -556,7 +574,7 @@ async function sweep() {
   const CONCURRENCY = parseInt(process.env.REPROCESS_CONCURRENCY || "8");
   const touchedDays = new Set<string>();
 
-  const { stale: todo, fresh } = findStaleSessions(sessions, EPISODES_DIR, dateOfSession, log);
+  const { stale: todo, fresh } = findStaleSessions(sessions, EPISODES_DIR, { log });
   exists = fresh;
   log(`  ${todo.length} need episodes, ${exists} exist`);
 
@@ -613,57 +631,18 @@ function parseRange(ref: string) {
   return null;
 }
 
-function weekDatesLocal(weekStr: string) {
-  const [yearStr, weekNum] = weekStr.split("-W");
-  const year = parseInt(yearStr);
-  const week = parseInt(weekNum);
-  const jan4 = new Date(year, 0, 4);
-  const dayOfWeek = jan4.getDay() || 7;
-  const monday = new Date(jan4);
-  monday.setDate(jan4.getDate() - dayOfWeek + 1 + (week - 1) * 7);
-  const dates: string[] = [];
-  for (let i = 0; i < 7; i++) {
-    const d = new Date(monday);
-    d.setDate(monday.getDate() + i);
-    dates.push(d.toISOString().slice(0, 10));
-  }
-  return dates;
-}
-
-function monthDates(monthStr: string) {
-  const [year, month] = monthStr.split("-").map(Number);
-  const dates: string[] = [];
-  const d = new Date(year, month - 1, 1);
-  while (d.getMonth() === month - 1) {
-    dates.push(d.toISOString().slice(0, 10));
-    d.setDate(d.getDate() + 1);
-  }
-  return dates;
-}
-
-function monthWeeksLocal(monthStr: string) {
-  const dates = monthDates(monthStr);
-  return [...new Set(dates.map(d => dateToWeek(d)))].sort();
-}
-
-function quarterMonthsLocal(quarterStr: string) {
-  const [yearStr, qStr] = quarterStr.split("-Q");
-  const q = parseInt(qStr);
-  const start = (q - 1) * 3 + 1;
-  return [0, 1, 2].map(i => `${yearStr}-${String(start + i).padStart(2, "0")}`);
-}
-
-function yearQuarters(yearStr: string) {
-  return [1, 2, 3, 4].map(q => `${yearStr}-Q${q}`);
-}
+// weekDates / monthDates / monthWeeks / quarterMonths / yearQuarters now come
+// from src/date-ranges.ts, which does all of it in UTC. The local-time versions
+// that used to live here shifted every date by a day at or east of UTC —
+// `snorrio reprocess 2026-W35` under Europe/Stockholm regenerated Aug 23-29.
 
 function rangeToDays(range: { type: string; ref: string }): string[] {
   switch (range.type) {
     case "day": return [range.ref];
-    case "week": return weekDatesLocal(range.ref);
+    case "week": return weekDates(range.ref);
     case "month": return monthDates(range.ref);
-    case "quarter": return quarterMonthsLocal(range.ref).flatMap(m => monthDates(m));
-    case "year": return yearQuarters(range.ref).flatMap(q => quarterMonthsLocal(q).flatMap(m => monthDates(m)));
+    case "quarter": return quarterMonths(range.ref).flatMap(m => monthDates(m));
+    case "year": return yearQuarters(range.ref).flatMap(q => quarterMonths(q).flatMap(m => monthDates(m)));
     default: return [];
   }
 }
@@ -767,17 +746,17 @@ async function reprocess(rangeStr: string, depthStr?: string) {
 
   if (depthLevel <= 2 && rangeLevel >= 2) {
     const weeks = range.type === "week" ? [range.ref]
-      : range.type === "month" ? monthWeeksLocal(range.ref)
-      : range.type === "quarter" ? quarterMonthsLocal(range.ref).flatMap(m => monthWeeksLocal(m))
-      : range.type === "year" ? yearQuarters(range.ref).flatMap(q => quarterMonthsLocal(q).flatMap(m => monthWeeksLocal(m)))
+      : range.type === "month" ? monthWeeks(range.ref)
+      : range.type === "quarter" ? quarterMonths(range.ref).flatMap(m => monthWeeks(m))
+      : range.type === "year" ? yearQuarters(range.ref).flatMap(q => quarterMonths(q).flatMap(m => monthWeeks(m)))
       : [];
     await rebuildCache("week", [...new Set(weeks)].sort());
   }
 
   if (depthLevel <= 3 && rangeLevel >= 3) {
     const months = range.type === "month" ? [range.ref]
-      : range.type === "quarter" ? quarterMonthsLocal(range.ref)
-      : range.type === "year" ? yearQuarters(range.ref).flatMap(q => quarterMonthsLocal(q))
+      : range.type === "quarter" ? quarterMonths(range.ref)
+      : range.type === "year" ? yearQuarters(range.ref).flatMap(q => quarterMonths(q))
       : [];
     await rebuildCache("month", months);
   }
@@ -823,7 +802,7 @@ function startFlushWatcher() {
     // map lies. The filesystem is the source of truth — "all sessions up to
     // date" must be true by construction. (2026-06-09 VM onboarding finding #2)
     try {
-      const { stale } = findStaleSessions(lineageSessionCandidates(activeLineageIndex), EPISODES_DIR, dateOfSession);
+      const { stale } = findStaleSessions(lineageSessionCandidates(activeLineageIndex), EPISODES_DIR);
       for (const s of stale) pendingPaths.add(s.path);
     } catch (err: any) {
       log(`Flush: disk reconciliation failed (${err.message?.slice(0, 100)}); proceeding with watcher-pending only`);
@@ -944,6 +923,31 @@ async function migrateProvenanceCommand(dryRun: boolean) {
 }
 
 // ============================================================================
+// LOCAL-DATE MIGRATION
+// ============================================================================
+
+// Stamp local_date/tz/utc_offset/tz_source onto historical episodes.
+//
+// Metadata only: no cascade, no LLM calls, no file moves, prose byte-identical.
+// DRY RUN IS THE DEFAULT and writing requires --confirm, because on 2026-08-24 a
+// mutating migration ran from an operator typing `--help` (an unrecognized flag
+// was ignored rather than rejected, and the write path was the default). Here the
+// safe path is the default and the destructive one has to be asked for by name.
+async function migrateLocalDatesCommand(confirm: boolean) {
+  log(`Local-date migration ${confirm ? "starting" : "dry-run (pass --confirm to write)"}...`);
+  const result = migrateEpisodeLocalDates({ episodesDir: EPISODES_DIR, dryRun: !confirm });
+  log(`  Episodes: ${result.episodesScanned} scanned, ${result.episodesChanged} ${confirm ? "stamped" : "would be stamped"}, ${result.episodesAlreadyStamped} already current`);
+  if (result.skipped.length) {
+    log(`  SKIPPED ${result.skipped.length} episode(s) that could not be stamped:`);
+    for (const { path, reason } of result.skipped.slice(0, 20)) log(`    ${path}: ${reason}`);
+  }
+  if (confirm && result.episodesChanged > 0) {
+    commitDataRepo({ message: `backfill local_date on ${result.episodesChanged} episodes (tz Etc/UTC, assumed)` });
+  }
+  return result;
+}
+
+// ============================================================================
 // MAIN
 // ============================================================================
 
@@ -961,6 +965,22 @@ async function main() {
     }
     await migrateProvenanceCommand(process.argv.includes("--dry-run"));
     process.exit(0);
+  }
+  if (process.argv.includes("--migrate-local-dates")) {
+    // Unknown flags stop the command; they are never read as consent.
+    const known = new Set(["--migrate-local-dates", "--confirm", "--dry-run"]);
+    const extra = process.argv.slice(2).filter((arg) => arg.startsWith("-") && !known.has(arg));
+    if (extra.length) {
+      console.error(`Unknown flag for --migrate-local-dates: ${extra[0]}`);
+      console.error("Accepted flags: --confirm, --dry-run");
+      process.exit(2);
+    }
+    if (process.argv.includes("--confirm") && process.argv.includes("--dry-run")) {
+      console.error("--confirm and --dry-run contradict each other; refusing to guess.");
+      process.exit(2);
+    }
+    const result = await migrateLocalDatesCommand(process.argv.includes("--confirm"));
+    process.exit(result.skipped.length ? 1 : 0);
   }
   if (process.argv.includes("--sweep")) { await sweep(); process.exit(0); }
   const rpIdx = process.argv.indexOf("--reprocess");

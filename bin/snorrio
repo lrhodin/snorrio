@@ -7,6 +7,7 @@
 //   snorrio reprocess <range> [depth] Regenerate from scratch in range
 //   snorrio status                   Show daemon and system status
 //   snorrio migrate-provenance       Add metadata/manifests and recascade affected dates
+//   snorrio migrate-local-dates      Stamp the local_date bucketing key onto existing episodes
 //   snorrio update                   Pull latest and restart daemon
 
 import { existsSync, statSync, writeFileSync, openSync, readSync, closeSync } from "fs";
@@ -54,6 +55,20 @@ const USAGE = {
     "  byte-for-byte. Run it detached; interrupting it mid-cascade leaves",
     "  the recascade marker unwritten and requires a re-run.",
   ].join("\n"),
+  "migrate-local-dates": [
+    "Usage: snorrio migrate-local-dates [--confirm]",
+    "  Stamp local_date, tz, utc_offset and tz_source onto every existing",
+    "  episode, freezing each one to the day directory it already sits in.",
+    "",
+    "  --dry-run   Report what would change and write nothing (the DEFAULT).",
+    "  --confirm   Actually write.",
+    "",
+    "  Metadata only: no episode is moved or regenerated, no cache is",
+    "  rebuilt, no LLM call is made, and prose bytes are preserved exactly.",
+    "  Historical episodes are recorded as tz Etc/UTC with tz_source",
+    "  'assumed' — the era is reconstructed, not observed per episode.",
+    "  Idempotent: a second run changes nothing.",
+  ].join("\n"),
   update: "Usage: snorrio update\n  Pull latest and restart the daemon.",
 };
 
@@ -64,6 +79,7 @@ const FLAG_SPECS = {
   reprocess: { allowed: [], positionals: 2 },
   status: { allowed: [] },
   "migrate-provenance": { allowed: ["--dry-run"] },
+  "migrate-local-dates": { allowed: ["--dry-run", "--confirm"] },
   update: { allowed: [] },
 };
 
@@ -200,6 +216,7 @@ Commands:
   reprocess <range> [depth]     Regenerate from scratch in range
   status                        Show daemon and system status
   migrate-provenance [--dry-run] Add episode lineage metadata, cache manifests, and recascade affected dates
+  migrate-local-dates [--confirm] Stamp the local_date bucketing key onto existing episodes (dry-run by default)
   update                        Pull latest and restart daemon
 
 Reprocess ranges: YYYY-MM-DD | YYYY-Www | YYYY-MM | YYYY-QN | YYYY
@@ -320,6 +337,20 @@ if (cmd === "flush") {
 } else if (cmd === "migrate-provenance") {
   const args = [join(PKG_ROOT, "src/episode-daemon.ts"), "--migrate-provenance"];
   if (cmdArgs.includes("--dry-run")) args.push("--dry-run");
+  try {
+    execFileSync("node", args, { stdio: "inherit", env: { ...process.env, SNORRIO_HOME } });
+  } catch {
+    process.exit(1);
+  }
+
+} else if (cmd === "migrate-local-dates") {
+  // Dry run unless --confirm. Contradictory flags are rejected rather than ranked.
+  if (cmdArgs.includes("--confirm") && cmdArgs.includes("--dry-run")) {
+    console.error("--confirm and --dry-run contradict each other; refusing to guess.");
+    process.exit(2);
+  }
+  const args = [join(PKG_ROOT, "src/episode-daemon.ts"), "--migrate-local-dates"];
+  if (cmdArgs.includes("--confirm")) args.push("--confirm");
   try {
     execFileSync("node", args, { stdio: "inherit", env: { ...process.env, SNORRIO_HOME } });
   } catch {

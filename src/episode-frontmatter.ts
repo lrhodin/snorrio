@@ -1,6 +1,26 @@
 import { hostname as osHostname } from "node:os";
 import type { SessionLineage } from "./session-lineage.ts";
 
+/**
+ * How the zone recorded in `tz` was established.
+ *   journal — read from the session's own record at generation time
+ *   system  — the machine's zone at generation time (config, else the host)
+ *   assumed — reconstructed after the fact; the zone is our best claim, not a
+ *             measurement. Historical backfill uses this rather than dressing an
+ *             inference as an observation.
+ */
+export type TimezoneSource = "journal" | "system" | "assumed";
+
+export interface EpisodeLocalDate {
+  /** YYYY-MM-DD. The bucketing key: written once, never recomputed. */
+  localDate: string;
+  /** IANA zone name in effect at that instant, e.g. "America/Los_Angeles". */
+  tz: string;
+  /** Resolved offset for human readability, e.g. "-07:00". Never used for arithmetic. */
+  utcOffset: string;
+  tzSource: TimezoneSource;
+}
+
 export interface EpisodeFrontmatterInput {
   origin: string;
   machine?: string;
@@ -8,6 +28,7 @@ export interface EpisodeFrontmatterInput {
   home: string;
   timestamp: string;
   lineage: SessionLineage;
+  localDate: EpisodeLocalDate;
 }
 
 export interface ParsedEpisodeFrontmatter {
@@ -29,8 +50,29 @@ export const LINEAGE_FRONTMATTER_KEYS = [
   "dependency_session_ids",
 ] as const;
 
+// Written once at generation time and then immutable — the same rule the vault
+// applies to dated records. `local_date` is the authoritative bucket for an
+// episode: recomputing it from a timestamp makes an episode's identity depend on
+// where the machine currently is, which is precisely the defect that made a
+// timezone change destructive.
+export const LOCAL_DATE_FRONTMATTER_KEYS = [
+  "local_date",
+  "tz",
+  "utc_offset",
+  "tz_source",
+] as const;
+
 function yamlScalar(value: string | null): string {
   return value === null ? "null" : JSON.stringify(value);
+}
+
+function localDateLines(localDate: EpisodeLocalDate): string[] {
+  return [
+    `local_date: ${yamlScalar(localDate.localDate)}`,
+    `tz: ${yamlScalar(localDate.tz)}`,
+    `utc_offset: ${yamlScalar(localDate.utcOffset)}`,
+    `tz_source: ${yamlScalar(localDate.tzSource)}`,
+  ];
 }
 
 function lineageLines(lineage: SessionLineage): string[] {
@@ -75,6 +117,7 @@ export function buildEpisodeFrontmatter(input: EpisodeFrontmatterInput): string 
     `machine: ${yamlScalar(input.machine ?? defaultMachine())}`,
     `source: ${yamlScalar(source)}`,
     `timestamp: ${yamlScalar(input.timestamp)}`,
+    ...localDateLines(input.localDate),
     ...lineageLines(input.lineage),
     "---",
     "",
@@ -108,4 +151,39 @@ export function upsertEpisodeLineageMetadata(
   });
   const prefix = `---\n${[...kept, ...lineageLines(lineage)].join("\n")}\n---\n`;
   return prefix + content.slice(end + "\n---\n".length);
+}
+
+// Metadata-only backfill of the local-date block, same contract as
+// upsertEpisodeLineageMetadata: every prose byte after the closing delimiter is
+// preserved exactly, unrelated frontmatter keys are left alone, and re-running
+// is a no-op because the four keys are replaced rather than appended.
+//
+// Deliberately NOT idempotent-by-recompute: it writes the local_date it is
+// given. The backfill passes the directory the episode already sits in, which
+// freezes history as it stands instead of re-deriving a date that would move
+// with the machine's zone.
+export function upsertEpisodeLocalDate(content: string, localDate: EpisodeLocalDate): string {
+  if (!content.startsWith("---\n")) {
+    throw new Error("cannot add local_date to an episode without frontmatter");
+  }
+  const end = content.indexOf("\n---\n", 4);
+  if (end < 0) throw new Error("malformed episode frontmatter");
+  const existing = content.slice(4, end).split("\n");
+  const keys = new Set<string>(LOCAL_DATE_FRONTMATTER_KEYS);
+  const lines = localDateLines(localDate);
+  const kept: string[] = [];
+  let replacedAt = -1;
+  for (const line of existing) {
+    const key = line.match(/^([A-Za-z0-9_-]+):/)?.[1];
+    if (key && keys.has(key)) {
+      // Rewrite the block where it already sits, so a second run produces the
+      // same bytes rather than migrating the keys to the end of the block.
+      if (replacedAt < 0) replacedAt = kept.length;
+      continue;
+    }
+    kept.push(line);
+  }
+  if (replacedAt < 0) kept.push(...lines);
+  else kept.splice(replacedAt, 0, ...lines);
+  return `---\n${kept.join("\n")}\n---\n` + content.slice(end + "\n---\n".length);
 }

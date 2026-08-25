@@ -10,6 +10,7 @@
 import { readFileSync } from "fs";
 import { join } from "path";
 import { SNORRIO_HOME, CONFIG_PATH } from "./ai.ts";
+import { temporalRefs } from "./local-date.ts";
 
 const CACHE_DIR = join(SNORRIO_HOME, "cache");
 
@@ -34,29 +35,16 @@ function loadTimezone(): string {
   }
 }
 
+// Which cache refs to inject for "now".
+//
+// Was `new Date(now.toLocaleString("en-US", { timeZone: tz }))` — render the
+// instant as a human string, reparse it, then read local-time getters off the
+// result — plus a hand-rolled ISO week formula that disagreed with
+// cascade-decision.ts dateToWeek() in 53-week years. Both are now the shared
+// Intl-based resolution in src/local-date.ts, which derives week/month/quarter
+// from the resolved Y/M/D instead of from a reparsed Date.
 export function getDateRefs() {
-  const tz = loadTimezone();
-  const now = new Date();
-  const pt = new Date(now.toLocaleString("en-US", { timeZone: tz }));
-  const today = `${pt.getFullYear()}-${String(pt.getMonth() + 1).padStart(2, "0")}-${String(pt.getDate()).padStart(2, "0")}`;
-
-  const yd = new Date(pt);
-  yd.setDate(yd.getDate() - 1);
-  const yesterday = `${yd.getFullYear()}-${String(yd.getMonth() + 1).padStart(2, "0")}-${String(yd.getDate()).padStart(2, "0")}`;
-
-  const dayOfYear = Math.floor((Date.UTC(pt.getFullYear(), pt.getMonth(), pt.getDate()) - Date.UTC(pt.getFullYear(), 0, 1)) / 86400000) + 1;
-  const dow = pt.getDay() || 7;
-  const wn = Math.floor((dayOfYear - dow + 10) / 7);
-  let wy = pt.getFullYear();
-  if (wn < 1) wy--;
-  const week = `${wy}-W${String(Math.max(1, wn)).padStart(2, "0")}`;
-
-  const month = today.slice(0, 7);
-  const q = Math.floor(pt.getMonth() / 3) + 1;
-  const quarter = `${pt.getFullYear()}-Q${q}`;
-  const year = `${pt.getFullYear()}`;
-
-  return { today, yesterday, week, month, quarter, year };
+  return temporalRefs(new Date(), loadTimezone());
 }
 
 /**

@@ -24,6 +24,8 @@ import { sessionMessagesToLlm, type RawSessionMessage } from "./model-independen
 import { resolveSession, sessionIdFromEntries, type SessionInfo } from "./session-meta.ts";
 import { resolveShaAt, readFileAtSha } from "./versioned-read.ts";
 import { getSessionLineageIndex, resolveLineageSession } from "./session-lineage.ts";
+import { temporalRefs } from "./local-date.ts";
+import { monthWeeks, quarterMonths, weekDates, yearQuarters } from "./date-ranges.ts";
 import { ensureCacheProvenanceManifest, formatManifestForPrompt, writeCacheWithProvenance, type CacheLevel, type CacheProvenanceManifest } from "./cache-provenance.ts";
 
 const HOME = process.env.HOME!;
@@ -91,30 +93,17 @@ function extractTimestamp(sessionFile: string): Date | null {
 }
 
 function loadTemporalContext(timestamp: Date): string {
-  const tz = getTimezone();
-  const pt = new Date(timestamp.toLocaleString("en-US", { timeZone: tz }));
-
-  const today = `${pt.getFullYear()}-${String(pt.getMonth() + 1).padStart(2, "0")}-${String(pt.getDate()).padStart(2, "0")}`;
-
-  const dayOfYear = Math.floor((Date.UTC(pt.getFullYear(), pt.getMonth(), pt.getDate()) - Date.UTC(pt.getFullYear(), 0, 1)) / 86400000) + 1;
-  const dow = pt.getDay() || 7;
-  const wn = Math.floor((dayOfYear - dow + 10) / 7);
-  let wy = pt.getFullYear();
-  if (wn < 1) wy--;
-  const week = `${wy}-W${String(Math.max(1, wn)).padStart(2, "0")}`;
-
-  const month = today.slice(0, 7);
-  const m = pt.getMonth();
-  const q = Math.floor(m / 3) + 1;
-  const quarter = `${pt.getFullYear()}-Q${q}`;
+  // Shared Intl-based resolution (src/local-date.ts). Was a format-then-reparse
+  // round-trip through toLocaleString("en-US") plus its own ISO week formula,
+  // which disagreed with cascade-decision.ts dateToWeek() in 53-week years and
+  // so could load a neighbouring week's cache as "that week".
+  const { today, week, month, quarter, year } = temporalRefs(timestamp, getTimezone());
 
   function readCache(level: string, key: string): string | null {
     try {
       return readFileSync(join(CACHE_DIR, level, `${key}.md`), "utf8").trim() || null;
     } catch { return null; }
   }
-
-  const year = `${pt.getFullYear()}`;
 
   const sections: string[] = [];
   const dayCtx = readCache("days", today);
@@ -397,22 +386,11 @@ Be precise — use session IDs, times, exact details. When referencing a specifi
 // WEEK RECALL — load day summaries as context
 // ============================================================================
 
-function weekDates(weekStr: string) {
-  const [yearStr, weekNum] = weekStr.split("-W");
-  const year = parseInt(yearStr);
-  const week = parseInt(weekNum);
-  const jan4 = new Date(year, 0, 4);
-  const dayOfWeek = jan4.getDay() || 7;
-  const monday = new Date(jan4);
-  monday.setDate(jan4.getDate() - dayOfWeek + 1 + (week - 1) * 7);
-  const dates: string[] = [];
-  for (let i = 0; i < 7; i++) {
-    const d = new Date(monday);
-    d.setDate(monday.getDate() + i);
-    dates.push(d.toISOString().slice(0, 10));
-  }
-  return dates;
-}
+// weekDates / monthWeeks / quarterMonths / yearQuarters live in
+// src/date-ranges.ts and do all arithmetic in UTC. The versions that used to be
+// defined here built dates with local-time constructors and read them back with
+// toISOString(), so at or east of UTC every date shifted by one day: under
+// Europe/Stockholm, `recall 2026-W35` loaded Aug 23-29 instead of Aug 24-30.
 
 async function recallWeek(weekStr: string, question: string, modelSpec: string | null, onChunk?: OnChunk, atSha?: string | null) {
   const dates = weekDates(weekStr);
@@ -464,31 +442,6 @@ You operate at week resolution — individual session details live one level dow
 // ============================================================================
 // MONTH RECALL — load week summaries as context
 // ============================================================================
-
-function monthWeeks(monthStr: string) {
-  const [year, month] = monthStr.split("-").map(Number);
-  const lastDay = new Date(year, month, 0);
-
-  const weeks = new Set<string>();
-  const d = new Date(year, month - 1, 1);
-  while (d <= lastDay) {
-    const dayOfYear = Math.floor((Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) - Date.UTC(d.getFullYear(), 0, 1)) / 86400000) + 1;
-    const dow = d.getDay() || 7;
-    const wn = Math.floor((dayOfYear - dow + 10) / 7);
-    let wy = d.getFullYear();
-    if (wn < 1) { wy--; weeks.add(`${wy}-W52`); }
-    else if (wn > 52) {
-      const dec31 = new Date(wy, 11, 31);
-      const dec31dow = dec31.getDay() || 7;
-      const maxWeek = dec31dow >= 4 ? 53 : 52;
-      if (wn > maxWeek) { wy++; weeks.add(`${wy}-W01`); }
-      else weeks.add(`${wy}-W${String(wn).padStart(2, "0")}`);
-    }
-    else weeks.add(`${wy}-W${String(wn).padStart(2, "0")}`);
-    d.setDate(d.getDate() + 1);
-  }
-  return [...weeks].sort();
-}
 
 function weekHasData(weekStr: string) {
   const dates = weekDates(weekStr);
@@ -543,13 +496,6 @@ You operate at month resolution — daily detail lives one level down in week su
 // ============================================================================
 // QUARTER RECALL — load month summaries as context
 // ============================================================================
-
-function quarterMonths(quarterStr: string) {
-  const [yearStr, qStr] = quarterStr.split("-Q");
-  const q = parseInt(qStr);
-  const startMonth = (q - 1) * 3 + 1;
-  return [0, 1, 2].map(i => `${yearStr}-${String(startMonth + i).padStart(2, "0")}`);
-}
 
 function monthHasData(monthStr: string) {
   const weeks = monthWeeks(monthStr);
@@ -612,10 +558,6 @@ You operate at the highest temporal resolution available. Patterns, trajectories
 // ============================================================================
 // YEAR RECALL — load quarter summaries as context
 // ============================================================================
-
-function yearQuarters(yearStr: string) {
-  return [1, 2, 3, 4].map(q => `${yearStr}-Q${q}`);
-}
 
 function quarterHasData(quarterStr: string) {
   const months = quarterMonths(quarterStr);
