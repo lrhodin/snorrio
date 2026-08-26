@@ -6,6 +6,7 @@ import { parseEpisodeFrontmatter } from "./episode-frontmatter.ts";
 import { buildEpisodeIndex, type EpisodeIndex } from "./episode-index.ts";
 import { getSessionLineageIndex, type SessionLineageIndex } from "./session-lineage.ts";
 import { SNORRIO_HOME } from "./ai.ts";
+import { normalizeTemporalNarrative, temporalNarrativeViolation } from "./temporal-narrative.ts";
 
 export const CACHE_PROVENANCE_SCHEMA_VERSION = 1;
 export type CacheLevel = "day" | "week" | "month" | "quarter" | "year";
@@ -132,8 +133,11 @@ export function writeCacheWithProvenance(
   summary: string,
   options: { cacheDir?: string; episodesDir?: string; lineageIndex?: SessionLineageIndex; episodeIndex?: EpisodeIndex } = {},
 ): CacheProvenanceManifest {
+  const normalized = normalizeTemporalNarrative(level, ref, summary);
+  const violation = temporalNarrativeViolation(normalized);
+  if (violation) throw new Error(`refusing to publish ${level} ${ref}: ${violation}`);
   const cacheDir = options.cacheDir ?? join(SNORRIO_HOME, "cache");
-  atomicWriteFile(join(cacheDir, LEVEL_DIRS[level], `${ref}.md`), summary);
+  atomicWriteFile(join(cacheDir, LEVEL_DIRS[level], `${ref}.md`), normalized);
   const manifest = buildCacheProvenanceManifest(level, ref, options);
   writeCacheProvenanceManifest(manifest, cacheDir);
   return manifest;

@@ -27,7 +27,8 @@ import { getSessionLineageIndex, resolveLineageSession } from "./session-lineage
 import { temporalRefs } from "./local-date.ts";
 import { createZoneResolver, tzJournalPath } from "./tz-journal.ts";
 import { monthWeeks, quarterMonths, weekDates, yearQuarters } from "./date-ranges.ts";
-import { ensureCacheProvenanceManifest, formatManifestForPrompt, writeCacheWithProvenance, type CacheLevel, type CacheProvenanceManifest } from "./cache-provenance.ts";
+import { ensureCacheProvenanceManifest, writeCacheWithProvenance, type CacheLevel, type CacheProvenanceManifest } from "./cache-provenance.ts";
+import { prepareTemporalNarrativeSource, TEMPORAL_NARRATIVE_INSTRUCTIONS } from "./temporal-narrative.ts";
 
 const HOME = process.env.HOME!;
 const PI_SESSIONS_DIR = join(HOME, ".pi/agent/sessions");
@@ -349,24 +350,36 @@ export function groupEpisodesByProvenance(episodes: LoadedEpisode[]): Provenance
 export function formatDayEvidenceContext(episodes: LoadedEpisode[]): string {
   const families = groupEpisodesByProvenance(episodes);
   return families.map((family, familyIndex) => {
-    const ids = family.episodes.map((episode) => episode.sessionId);
-    const complete = family.episodes.every((episode) => episode.lineageComplete);
-    const conflict = family.episodes.some((episode) => episode.lineageConflict);
-    const header = [
-      `--- Evidence source ${familyIndex + 1}/${families.length}: provenance family ${family.provenanceFamilyId} ---`,
-      `ONE evidence source; ${family.episodes.length} session${family.episodes.length === 1 ? "" : "s"}: ${ids.join(", ")}`,
-      `lineage: ${complete && !conflict ? "complete" : conflict ? "conflicted/incomplete — do not infer missing links" : "unknown/incomplete — do not treat as independent corroboration"}`,
-    ].join("\n");
-    const bodies = family.episodes.map((episode, episodeIndex) =>
-      `### Family session ${episodeIndex + 1}/${family.episodes.length} (${episode.sessionId})\n${episode.content}`
+    // Group boundaries carry the only model-visible provenance signal. IDs,
+    // completeness diagnostics, frontmatter, and timestamps are deliberately
+    // absent: they are machinery, not part of the day being remembered.
+    const bodies = family.episodes.map((episode) =>
+      prepareTemporalNarrativeSource(episode.content)
     ).join("\n\n");
-    return `${header}\n${bodies}`;
+    return `--- Internal source group ${familyIndex + 1} ---\n${bodies}`;
   }).join("\n\n");
 }
 
-export const PROVENANCE_SYNTHESIS_INSTRUCTIONS = `Treat each provenance_family_id as ONE evidence source, even when it contains parent and child sessions or appears on multiple dates. Preserve every session's content and session ID, but never count a parent's restatement of a child's work as independent corroboration. Machine-readable provenance manifests in the context are authoritative even if an LLM summary omitted their IDs. Carry exact provenance_family_id values into the answer for every factual thread so the same family can be recognized at day, week, month, quarter, and year levels. Unrelated family IDs are separate evidence sources. If lineage is incomplete or conflicted, say so rather than inventing a relationship.`;
+export const PROVENANCE_SYNTHESIS_INSTRUCTIONS = `Provenance metadata is private reasoning context. Use provenance_family_id only to avoid double-counting repeated accounts inside one connected family. Distinct family IDs mean only that no structural relationship is recorded; they do not prove independent corroboration.${TEMPORAL_NARRATIVE_INSTRUCTIONS}`;
 
-function childManifest(level: CacheLevel, ref: string, atSha?: string | null): CacheProvenanceManifest | { schemaVersion: 0; level: CacheLevel; ref: string; missing: true } {
+type MissingManifest = { schemaVersion: 0; level: CacheLevel; ref: string; missing: true };
+
+function opaqueSourceGroups(
+  manifest: CacheProvenanceManifest | MissingManifest,
+  aliases: Map<string, string>,
+): string {
+  const families = "families" in manifest ? manifest.families : [];
+  return families.map((family) => {
+    let alias = aliases.get(family.provenanceFamilyId);
+    if (!alias) {
+      alias = `S${aliases.size + 1}`;
+      aliases.set(family.provenanceFamilyId, alias);
+    }
+    return alias;
+  }).join(", ");
+}
+
+function childManifest(level: CacheLevel, ref: string, atSha?: string | null): CacheProvenanceManifest | MissingManifest {
   if (atSha) {
     const raw = readFileAtSha(atSha, `cache/${level === "day" ? "days" : level === "week" ? "weeks" : level === "month" ? "months" : level === "quarter" ? "quarters" : "years"}/${ref}.provenance.json`);
     if (raw) {
@@ -387,7 +400,7 @@ function recallDay(dateStr: string, question: string, modelSpec: string | null, 
 
 ${PROVENANCE_SYNTHESIS_INSTRUCTIONS}
 
-Be precise — use session IDs, times, exact details. When referencing a specific session, name it so the caller can drill into raw session context for verbatim detail. If your context doesn't contain enough detail, say which session(s) likely have the answer.`;
+Be precise about the work, decisions, reasoning, and commitments. If the context lacks a fact, state the factual gap without discussing source mechanics.`;
 
   const messages = [userMessage(`Question: ${question}\n\n---\n\nContext (episode summaries for ${dateStr}):\n\n${context}`)];
   return apiCallStream(messages, systemPrompt, modelSpec, onChunk);
@@ -436,15 +449,16 @@ async function recallWeek(weekStr: string, question: string, modelSpec: string |
 
   if (daySummaries.length === 0) return `[recall: no data found for ${weekStr}]`;
 
+  const sourceAliases = new Map<string, string>();
   const context = daySummaries.map(d =>
-    `--- ${d.date} (${d.episodeCount} episodes) ---\nPROVENANCE_MANIFEST ${formatManifestForPrompt(d.manifest as CacheProvenanceManifest)}\n${d.summary}`
+    `--- ${d.date} ---\nINTERNAL_SOURCE_GROUPS ${opaqueSourceGroups(d.manifest, sourceAliases)}\n${d.summary}`
   ).join("\n\n");
 
   const systemPrompt = `You are a recall agent for week ${weekStr}. Your context is day-level summaries for each day that had activity. Each summary covers all sessions from that day.
 
 ${PROVENANCE_SYNTHESIS_INSTRUCTIONS}
 
-You operate at week resolution — individual session details live one level down in day summaries, verbatim detail lives two levels down in raw sessions. Name specific days or sessions when referencing detail so the caller can drill deeper. If your context doesn't contain enough detail, say which day likely has the answer.`;
+You operate at week resolution. Preserve the developing threads and trajectory without exposing the memory hierarchy or its source mechanics.`;
 
   const messages = [userMessage(`Question: ${question}\n\n---\n\nContext (day summaries for ${weekStr}):\n\n${context}`)];
   return apiCallStream(messages, systemPrompt, modelSpec, onChunk);
@@ -490,15 +504,16 @@ async function recallMonth(monthStr: string, question: string, modelSpec: string
 
   if (weekSummaries.length === 0) return `[recall: no data found for ${monthStr}]`;
 
+  const sourceAliases = new Map<string, string>();
   const context = weekSummaries.map(w =>
-    `--- ${w.week} (${w.activeDays} active days) ---\nPROVENANCE_MANIFEST ${formatManifestForPrompt(w.manifest as CacheProvenanceManifest)}\n${w.summary}`
+    `--- ${w.week} ---\nINTERNAL_SOURCE_GROUPS ${opaqueSourceGroups(w.manifest, sourceAliases)}\n${w.summary}`
   ).join("\n\n");
 
   const systemPrompt = `You are a recall agent for ${monthStr}. Your context is week-level summaries for each week that had activity.
 
 ${PROVENANCE_SYNTHESIS_INSTRUCTIONS}
 
-You operate at month resolution — daily detail lives one level down in week summaries, session detail lives two levels down. Name specific weeks or days when referencing detail so the caller can drill deeper. If your context doesn't contain enough detail, say which week likely has the answer.`;
+You operate at month resolution. Preserve shifts, themes, and direction without exposing the memory hierarchy or its source mechanics.`;
 
   const messages = [userMessage(`Question: ${question}\n\n---\n\nContext (week summaries for ${monthStr}):\n\n${context}`)];
   return apiCallStream(messages, systemPrompt, modelSpec, onChunk);
@@ -542,15 +557,16 @@ async function recallQuarter(quarterStr: string, question: string, modelSpec: st
 
   if (monthSummaries.length === 0) return `[recall: no data found for ${quarterStr}]`;
 
+  const sourceAliases = new Map<string, string>();
   const context = monthSummaries.map(m =>
-    `--- ${m.month} ---\nPROVENANCE_MANIFEST ${formatManifestForPrompt(m.manifest as CacheProvenanceManifest)}\n${m.summary}`
+    `--- ${m.month} ---\nINTERNAL_SOURCE_GROUPS ${opaqueSourceGroups(m.manifest, sourceAliases)}\n${m.summary}`
   ).join("\n\n");
 
   const systemPrompt = `You are a recall agent for ${quarterStr}. Your context is month-level summaries for each month that had activity.
 
 ${PROVENANCE_SYNTHESIS_INSTRUCTIONS}
 
-You operate at the highest temporal resolution available. Patterns, trajectories, and emergent themes visible here are invisible at lower levels. Month-level detail lives one level down, week and day detail two and three levels down. Name specific months, weeks, or days when referencing detail so the caller can drill deeper. If your context doesn't contain enough detail, say which month likely has the answer.`;
+You operate at quarter resolution. Surface patterns, trajectories, and emergent themes without exposing the memory hierarchy or its source mechanics.`;
 
   const messages = [userMessage(`Question: ${question}\n\n---\n\nContext (month summaries for ${quarterStr}):\n\n${context}`)];
   const result = await apiCallStream(messages, systemPrompt, modelSpec, onChunk);
@@ -604,19 +620,16 @@ async function recallYear(yearStr: string, question: string, modelSpec: string |
 
   if (quarterSummaries.length === 0) return `[recall: no data found for ${yearStr}]`;
 
+  const sourceAliases = new Map<string, string>();
   const context = quarterSummaries.map(q =>
-    `--- ${q.quarter} ---\nPROVENANCE_MANIFEST ${formatManifestForPrompt(q.manifest as CacheProvenanceManifest)}\n${q.summary}`
+    `--- ${q.quarter} ---\nINTERNAL_SOURCE_GROUPS ${opaqueSourceGroups(q.manifest, sourceAliases)}\n${q.summary}`
   ).join("\n\n");
 
   const systemPrompt = `You are a recall agent for ${yearStr}. Your context is quarter-level summaries for each quarter that had activity.
 
 ${PROVENANCE_SYNTHESIS_INSTRUCTIONS}
 
-You operate at the highest temporal resolution available — the full year. Arcs, transformations, and emergent themes visible here are invisible at any lower level. Quarter-level detail lives one level down, month and week detail two and three levels down.
-
-Every thread present in the quarter summaries is real and must be representable from this level. Do not drop threads. Do not infer outcomes that aren't stated — if something is unresolved in the quarters, it's unresolved here. Never fabricate facts.
-
-Name specific quarters, months, or weeks when referencing detail so the caller can drill deeper. If your context doesn't contain enough detail, say which quarter likely has the answer.`;
+You operate at year resolution. Carry every real thread forward, preserve unresolved outcomes, and surface arcs and transformations without exposing the memory hierarchy or its source mechanics.`;
 
   const messages = [userMessage(`Question: ${question}\n\n---\n\nContext (quarter summaries for ${yearStr}):\n\n${context}`)];
   const result = await apiCallStream(messages, systemPrompt, modelSpec, onChunk);

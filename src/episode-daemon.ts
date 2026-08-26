@@ -59,6 +59,7 @@ import { migrateEpisodeLocalDates } from "./local-date-migration.ts";
 import { cacheManifestNeedsRefresh, writeCacheWithProvenance, type CacheLevel } from "./cache-provenance.ts";
 import { migrateProvenanceMetadata, planProvenanceRecascade, writeProvenanceRecascadeMarker } from "./provenance-migration.ts";
 import { externalLineageSessionCandidates, lineageSessionCandidates } from "./session-candidates.ts";
+import { TEMPORAL_NARRATIVE_INSTRUCTIONS, temporalNarrativeViolation } from "./temporal-narrative.ts";
 
 // Side-channel flag used to suppress the cascading temporal-cache rebuild during
 // batch operations (--reprocess, midnight sweeps). Read in five places below;
@@ -353,12 +354,11 @@ async function generateEpisode(filePath: string) {
 // TEMPORAL HELPERS
 // ============================================================================
 
-const PROVENANCE_CACHE_RULE = " Treat each provenance_family_id as ONE evidence source, including when the same family spans dates. Preserve exact provenance_family_id values and session IDs in the synthesis. Parent restatements and child results in one family are not independent corroboration; incomplete lineage must remain labeled incomplete.";
-const CACHE_Q_DAY = "Tell the story of today — write it as a narrative, not a checklist. What was worked on, what got decided, what changed. Track commitments made for today, but don't carry weekly or longer-term goals — just mention them naturally so higher levels can pick them up. Include session IDs so any thread can be traced back to its source." + PROVENANCE_CACHE_RULE;
-const CACHE_Q_WEEK = "Write a narrative of this week so far — an essay, not a checklist. What threads are developing, what started or stalled, what's the trajectory? Don't repeat daily details — just what's visible across multiple days. You're the continuity layer across day boundaries — anything in flight that a new day needs to pick up should be here, with enough detail to find the right day. Reference specific dates so the reader can navigate down." + PROVENANCE_CACHE_RULE;
-const CACHE_Q_MONTH = "Write a narrative of this month so far — an essay, not a checklist. What shifted, what themes emerged or faded, what's shaping the direction? Don't restate weekly details — just what's visible at the monthly level. You're the continuity layer across week boundaries — any active threads a new week needs to carry forward should be here, with enough context to find the right week. Reference specific weeks so the reader can navigate down." + PROVENANCE_CACHE_RULE;
-const CACHE_Q_QUARTER = "Write a narrative of this quarter so far — an essay, not a checklist. What's the arc, what materialized that wasn't there at the start, what's building? Don't restate monthly details — just what's visible from this altitude. You're the continuity layer across month boundaries — any arcs a new month needs to carry forward should be here, with enough context to find the right month. Reference specific months so the reader can navigate down." + PROVENANCE_CACHE_RULE;
-const CACHE_Q_YEAR = "Write a narrative of this year so far. Every thread surfaced at the quarter level should be carried here — not restated in full, but faithfully represented at a higher level of abstraction so any of them can be drilled into. No thread should disappear between quarters and the year.\n\nGround every claim in what the quarter summaries actually say. If a quarter doesn't state an outcome, don't infer one. Say what's known and what's unresolved — never fabricate a status.\n\nWhat's the through-line? What transformed? What emerged that wasn't imaginable at the start? What's visible from this altitude that no single quarter can see? Surface cross-quarter arcs and tensions, but stay anchored to what actually happened. Reference specific quarters so the reader can navigate down." + PROVENANCE_CACHE_RULE;
+const CACHE_Q_DAY = "Tell the story of today as a coherent narrative, not a checklist or audit report. What was worked on, what got decided, what changed, and why? Track immediate commitments naturally. Keep internal source mechanics entirely invisible." + TEMPORAL_NARRATIVE_INSTRUCTIONS;
+const CACHE_Q_WEEK = "Write a narrative of this week so far. What threads are developing, what started or stalled, and what is the trajectory? Carry work in flight across day boundaries without turning the answer into an index or audit report." + TEMPORAL_NARRATIVE_INSTRUCTIONS;
+const CACHE_Q_MONTH = "Write a narrative of this month so far. What shifted, what themes emerged or faded, and what is shaping the direction? Surface what is visible across weeks without turning the answer into an index or audit report." + TEMPORAL_NARRATIVE_INSTRUCTIONS;
+const CACHE_Q_QUARTER = "Write a narrative of this quarter so far. What is the arc, what materialized that was not there at the start, and what is building? Surface what is visible across months without turning the answer into an index or audit report." + TEMPORAL_NARRATIVE_INSTRUCTIONS;
+const CACHE_Q_YEAR = "Write a narrative of this year so far. Carry every real thread forward at the right altitude. Ground claims in the supplied summaries, preserve unresolved outcomes, and surface the through-line, transformations, and cross-quarter tensions without turning the answer into an index or audit report." + TEMPORAL_NARRATIVE_INSTRUCTIONS;
 
 async function cascadeForDate(dateStr: string) {
   // Only called in live mode (debounce path) — _skipCascade gates this.
@@ -398,9 +398,14 @@ async function rebuildCache(
   const failed: string[] = [];
 
   // One rebuild attempt. Returns null on success, else why it failed.
-  const attempt = async (ref: string): Promise<string | null> => {
-    const summary = await recall(ref, prompts[level], null);
+  const attempt = async (ref: string, attemptNumber: number): Promise<string | null> => {
+    const correction = attemptNumber > 1
+      ? "\n\nThe prior draft was rejected because it exposed an internal timestamp or source mechanic. Rewrite from scratch. Use Pacific time only and include no audit, provenance, lineage, source, session, manifest, coverage, or drill-down language."
+      : "";
+    const summary = await recall(ref, prompts[level] + correction, null);
     if (summary && !summary.startsWith("[recall:")) {
+      const violation = temporalNarrativeViolation(summary as string);
+      if (violation) return `cache rebuild rejected ${level} ${ref}: ${violation}`;
       writeCacheWithProvenance(level, ref, summary as string, { lineageIndex: activeLineageIndex ?? undefined });
       return null;
     }
@@ -411,8 +416,12 @@ async function rebuildCache(
     // Retries apply only where a caller depends on completeness. Live-mode
     // cascades run constantly and self-heal via validateCaches, so paying for
     // repeat LLM calls there would be waste.
-    const attempts = strict ? REBUILD_ATTEMPTS : 1;
-    const problem = await withRetries((n) => attempt(ref), {
+    // One retry is mandatory for the public prose contract. Models sometimes
+    // copy a source's UTC label or provenance aside despite explicit
+    // instructions; the validator must get a chance to correct that rather
+    // than leaving the old cache in place indefinitely.
+    const attempts = strict ? REBUILD_ATTEMPTS : 2;
+    const problem = await withRetries((n) => attempt(ref, n), {
       attempts,
       onAttempt: ({ attempt: n, problem, final }) => {
         if (problem === null) {
@@ -895,6 +904,8 @@ function startFlushWatcher() {
         log(`  Regenerating day cache: ${dateStr}`);
         const daySummary = await recall(dateStr, CACHE_Q_DAY, null);
         if (daySummary && !daySummary.startsWith("[recall:")) {
+          const violation = temporalNarrativeViolation(daySummary as string);
+          if (violation) throw new Error(`day cache rebuild rejected: ${violation}`);
           writeCacheWithProvenance("day", dateStr, daySummary as string, { lineageIndex: activeLineageIndex ?? undefined });
         }
       } catch (err: any) { log(`  Day cache error: ${err.message?.slice(0, 100)}`); }

@@ -174,7 +174,7 @@ test("cache writes include a sidecar and validation rejects absent, wrong-schema
   const emptyIndex = buildSessionLineageIndex([]);
 
   writeCacheWithProvenance("day", "2026-08-23", "summary", { cacheDir, episodesDir, lineageIndex: emptyIndex });
-  assert.equal(readFileSync(join(cacheDir, "days", "2026-08-23.md"), "utf8"), "summary");
+  assert.equal(readFileSync(join(cacheDir, "days", "2026-08-23.md"), "utf8"), "# Sunday, August 23, 2026\n\nsummary");
   assert.ok(readCacheProvenanceManifest("day", "2026-08-23", cacheDir));
   const newest = statSync(join(dayDir, "one.md")).mtimeMs;
   assert.equal(cacheManifestNeedsRefresh("day", "2026-08-23", newest, { cacheDir, episodesDir, lineageIndex: emptyIndex }), false);

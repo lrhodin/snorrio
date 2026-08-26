@@ -208,11 +208,11 @@ test("recall-engine retrieval invariants", async (t) => {
     assert.deepEqual(families[0].episodes.map(ep => ep.sessionId), ["parent", "child"]);
 
     const context = formatDayEvidenceContext(episodes);
-    assert.match(context, /provenance family family-root/);
-    assert.match(context, /ONE evidence source; 2 sessions: parent, child/);
+    assert.match(context, /Internal source group 1/);
+    assert.match(context, /Internal source group 2/);
     assert.match(context, /parent body/);
     assert.match(context, /child body/);
-    assert.match(context, /provenance family independent/);
+    assert.doesNotMatch(context, /family-root|independent body.*provenance|session_id|lineage/i);
   });
 
   await t.test("legacy episodes consult live dependency lineage; unrecoverable legacy remains incomplete", () => {
@@ -240,7 +240,7 @@ test("recall-engine retrieval invariants", async (t) => {
       const unknown = episodes.find(ep => ep.sessionId === id)!;
       assert.equal(unknown.lineageComplete, false);
       assert.equal(unknown.lineageSource, "unknown");
-      assert.match(formatDayEvidenceContext([unknown]), /unknown\/incomplete/);
+      assert.doesNotMatch(formatDayEvidenceContext([unknown]), /unknown\/incomplete|lineage|provenance/i);
     }
   });
 
@@ -263,9 +263,9 @@ test("recall-engine retrieval invariants", async (t) => {
     const combined = [...loadEpisodes("2026-03-11"), ...loadEpisodes(H)] as any[];
     const family = groupEpisodesByProvenance(combined).find(f => f.provenanceFamilyId === "family-root")!;
     assert.deepEqual(family.episodes.map(ep => ep.sessionId), ["parent", "child", "later"]);
-    assert.match(provenanceInstructions, /appears on multiple dates/);
-    assert.match(provenanceInstructions, /Carry exact provenance_family_id values/);
-    assert.match(provenanceInstructions, /ONE evidence source/);
+    assert.match(provenanceInstructions, /private reasoning context/);
+    assert.match(provenanceInstructions, /do not prove independent corroboration/);
+    assert.match(provenanceInstructions, /Never mention provenance/);
   });
 
   await t.test("weekHasData reflects underlying loadEpisodes", () => {

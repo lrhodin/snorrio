@@ -101,10 +101,10 @@ test("sub-summary cache writes are guarded against error sentinels", async (t) =
   });
 
   // --- Clean result: the success path is unchanged ----------------------
-  await t.test("a clean summary result writes manifests and injects them even when summaries omit IDs", async () => {
+  await t.test("a clean summary writes sidecars while prompts expose only opaque source groups", async () => {
     const seenPrompts: string[] = [];
-    // The LLM deliberately omits every provenance ID. Production recall must
-    // still pass machine-readable child manifests to the next tier.
+    // The LLM deliberately omits every internal ID. Production recall keeps
+    // machine-readable sidecars but exposes only stable opaque groups upstream.
     setCompleteForTest(async (messages: any[]) => {
       seenPrompts.push(JSON.stringify(messages));
       return {
@@ -126,22 +126,16 @@ test("sub-summary cache writes are guarded against error sentinels", async (t) =
       assert.ok(!cached.startsWith("[recall:"), `cache at ${p} holds a sentinel: ${cached}`);
       assert.ok(existsSync(p.replace(/\.md$/, ".provenance.json")), `manifest missing beside ${p}`);
     }
-    const productionContexts = seenPrompts.filter(prompt => prompt.includes("PROVENANCE_MANIFEST"));
-    assert.ok(productionContexts.length >= 4, "week/month/quarter/year production contexts should inject manifests");
-    for (const level of ["day", "week", "month", "quarter"]) {
-      assert.ok(
-        productionContexts.some(prompt => prompt.includes(`\\\"level\\\":\\\"${level}\\\"`) && prompt.includes("sess-a")),
-        `${level} child manifest must carry the session id omitted by summary prose`,
-      );
-    }
+    const productionContexts = seenPrompts.filter(prompt => prompt.includes("INTERNAL_SOURCE_GROUPS"));
+    assert.ok(productionContexts.length >= 4, "higher tiers should receive opaque deduplication groups");
+    assert.ok(productionContexts.every(prompt => prompt.includes("S1")));
+    assert.ok(productionContexts.every(prompt => !prompt.includes("sess-a") && !prompt.includes("PROVENANCE_MANIFEST")));
 
     seenPrompts.length = 0;
     const year = await recall("2026", "what happened this year?", null);
     assert.ok(!(year as string).startsWith("[recall:"));
-    assert.ok(
-      seenPrompts.some(prompt => prompt.includes("PROVENANCE_MANIFEST") && prompt.includes("quarter") && prompt.includes("sess-a")),
-      "year production context must inject the quarter manifest",
-    );
+    assert.ok(seenPrompts.some(prompt => prompt.includes("INTERNAL_SOURCE_GROUPS")));
+    assert.ok(seenPrompts.every(prompt => !prompt.includes("sess-a") && !prompt.includes("PROVENANCE_MANIFEST")));
   });
 
   setCompleteForTest(null); // restore real boundary
