@@ -55,7 +55,13 @@ If it happened in a past session and isn't saved as a file, recall is how you fi
 
 ## Invocation
 
-`recall` is on PATH (`~/.local/bin/recall`). Always use it directly — never run the source file.
+**Inside Pi, use the first-class `recall` tool when it is available.** It streams
+answer text into the tool display in real time. Do not shell out to the CLI
+through `bash`: generic shell tools expose output only at their next check-in or
+when the process exits, which makes a correctly streaming CLI look buffered.
+
+Outside Pi, or only when the tool is unavailable, use the `recall` CLI on PATH
+(`~/.local/bin/recall`). Run it directly—never run the source file:
 
 ```bash
 recall <ref> "question"
@@ -200,13 +206,17 @@ repo's git history — the faithful past-self view, free of later hindsight.
 - Timestamps before the data repo's first commit return a clear
   "history starts later" error.
 
-## Timeout
+## Timeout and cancellation
 
-Recall invokes an LLM under the hood. **Always use a minimum 120-second timeout** (or omit timeout entirely). If you set it too short and it aborts, you lose all the work and have to re-run.
+The first-class Pi tool needs no wrapper timeout and forwards Pi's cancellation
+signal into the model request. For the CLI fallback, do not put a short killing
+timeout around `recall`; allow at least 120 seconds or omit the timeout.
 
 ## Model selection
 
-Default model: opus. Override with `--model`:
+Omit `model` in the Pi tool to use Snorrio's configured model, or set it to an
+alias/provider model ID. In the CLI fallback, use `--model`:
+
 ```bash
 recall --model sonnet 2026-W12 "quick summary"
 ```

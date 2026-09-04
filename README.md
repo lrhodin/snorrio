@@ -8,7 +8,9 @@ Pi control package.
 
 The daemon writes what happened after a session goes quiet—not a transcript, but
 an episode of what the work meant. Episodes fold into days, weeks, months,
-quarters, and years. Herdr supplies panes that survive disconnects and agents you
+quarters, and years. Recall is a first-class Pi tool whose answers stream into
+the tool display as they are generated; the standalone CLI provides the same
+stream outside Pi. Herdr supplies panes that survive disconnects and agents you
 can watch, steer, and resume.
 
 Memory, configuration, and session history remain plain text on your machine. Model requests follow the privacy terms of whichever provider you configure.
