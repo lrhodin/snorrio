@@ -158,11 +158,13 @@ export const CONFIG_DIR = join(SNORRIO_HOME, "config");
 export const CONFIG_PATH = join(CONFIG_DIR, "config.json");
 const PI_SETTINGS_PATH = join(HOME, ".pi/agent/settings.json");
 
-// Aliases map a model *type* to a family prefix per provider — NOT a pinned
-// version. resolveAlias() picks the newest available version of that family
-// from pi-ai's registry, so "opus"/"fable" always track the latest release and
-// version numbers never have to be hand-edited here. (See latestModelForFamily.)
-const MODEL_ALIASES: Record<string, Record<string, string>> = {
+// Aliases map a model *type* to a versioned family per provider — NOT a pinned
+// version. A string describes families whose version follows the name
+// (claude-opus-4.8); prefix/suffix describes families whose version sits in
+// the middle (gpt-5.6-sol). resolveAlias() picks the newest registry match, so
+// version numbers never have to be hand-edited by callers.
+type ModelFamily = string | { prefix: string; suffix: string };
+const MODEL_ALIASES: Record<string, Record<string, ModelFamily>> = {
   opus: {
     "anthropic": "claude-opus",
     "github-copilot": "claude-opus",
@@ -178,6 +180,9 @@ const MODEL_ALIASES: Record<string, Record<string, string>> = {
   fable: {
     "anthropic": "claude-fable",
     "github-copilot": "claude-fable",
+  },
+  sol: {
+    "openai-codex": { prefix: "gpt", suffix: "sol" },
   },
 };
 
@@ -230,10 +235,16 @@ async function hasAuth(provider: string): Promise<boolean> {
 
 // --- Model Resolution (pi backend) ---
 
-// Resolve a family prefix to the newest concrete model for a provider, using
-// the runtime's model list (built-in + extension-registered providers).
-function latestModelForFamilyRt(rt: any, provider: string, family: string): Model | undefined {
-  const re = new RegExp(`^${family}[-.]([0-9]+(?:[-.][0-9]+)*)$`);
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// Resolve a versioned family to the newest concrete model for a provider,
+// using the runtime's model list (built-in + extension-registered providers).
+function latestModelForFamilyRt(rt: any, provider: string, family: ModelFamily): Model | undefined {
+  const prefix = typeof family === "string" ? family : family.prefix;
+  const suffix = typeof family === "string" ? "" : `[-.]${escapeRegex(family.suffix)}`;
+  const re = new RegExp(`^${escapeRegex(prefix)}[-.]([0-9]+(?:[-.][0-9]+)*)${suffix}$`);
   let best: { model: Model; ver: number[] } | undefined;
   for (const model of (rt.getModels(provider) as Model[])) {
     const m = model.id.match(re);
