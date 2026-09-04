@@ -12,7 +12,7 @@
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*",
-    "typebox": "*"
+    "@sinclair/typebox": "*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

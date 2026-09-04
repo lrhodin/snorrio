@@ -16,7 +16,6 @@
 //   recall 2026-03-05 "What shipped today?"
 //   recall 2026-W09 "What was the main thread?"
 
-import { AsyncLocalStorage } from "node:async_hooks";
 import { readFileSync, readdirSync, existsSync, realpathSync } from "fs";
 import { join } from "path";
 import { pathToFileURL } from "url";
@@ -652,21 +651,11 @@ You operate at year resolution. Carry every real thread forward, preserve unreso
 
 type OnChunk = (accumulated: string) => void;
 
-export interface RecallOptions {
-  context?: boolean;
-  onChunk?: OnChunk;
-  at?: string;
-  signal?: AbortSignal;
-  /** CLI liveness pulse; tool callers render their own loading state. */
-  emitThinking?: boolean;
-}
-
-type RecallExecutionContext = Pick<RecallOptions, "signal" | "emitThinking">;
-
-// Keep cancellation and CLI-only liveness scoped to one recall invocation.
-// Recall calls can run in parallel, so process-global mutable flags would let
-// one call abort or expose thinking state in an unrelated sibling.
-const recallExecution = new AsyncLocalStorage<RecallExecutionContext>();
+// CLI-only streaming state. Set by main() exclusively; programmatic callers
+// (e.g. the episode daemon) leave these unset so apiCallStream stays a pure
+// text pump for them — no abort wiring, no stderr liveness writes.
+let _cliAbortSignal: AbortSignal | undefined;
+let _cliEmitThinking = false;
 
 // Test seam: lets tests substitute the non-streamed LLM boundary without a
 // network call (e.g. simulate a 429/overloaded sub-summary). Production never
@@ -677,20 +666,7 @@ export function __setCompleteForTest(fn: typeof complete | null): void {
 }
 
 async function apiCall(messages: any[], systemPrompt: string, modelSpec: string | null) {
-  const signal = recallExecution.getStore()?.signal;
-  let result: Awaited<ReturnType<typeof complete>>;
-  try {
-    result = await _complete(
-      messages,
-      systemPrompt,
-      modelSpec,
-      null,
-      signal ? { signal } : {},
-    );
-  } catch (err: any) {
-    if (signal?.aborted || err?.name === "AbortError") return "[recall: aborted]";
-    return `[recall: API error — ${(err?.message || String(err)).slice(0, 200)}]`;
-  }
+  const result = await _complete(messages, systemPrompt, modelSpec);
 
   if (result.stopReason === "error") {
     const errMsg = result.errorMessage || "unknown API error";
@@ -704,8 +680,9 @@ async function apiCall(messages: any[], systemPrompt: string, modelSpec: string 
 async function apiCallStream(messages: any[], systemPrompt: string, modelSpec: string | null, onChunk?: OnChunk) {
   if (!onChunk) return apiCall(messages, systemPrompt, modelSpec);
 
-  const execution = recallExecution.getStore();
-  const options = execution?.signal ? { signal: execution.signal } : {};
+  // Pass the CLI abort signal through to pi-ai so SIGINT cancels the in-flight
+  // HTTP request rather than just abandoning the loop.
+  const options = _cliAbortSignal ? { signal: _cliAbortSignal } : {};
   const eventStream = aiStream(messages, systemPrompt, modelSpec, null, options);
   let accumulated = "";
   let thinkingOpen = false;
@@ -720,7 +697,7 @@ async function apiCallStream(messages: any[], systemPrompt: string, modelSpec: s
         closeThinking();
         accumulated += event.delta;
         onChunk(accumulated);
-      } else if (event.type === "thinking_delta" && execution?.emitThinking) {
+      } else if (event.type === "thinking_delta" && _cliEmitThinking) {
         // Liveness only. stdout stays answer-text-only; the thinking pulse goes
         // to stderr so a long opus pre-text phase doesn't look like a hang.
         if (!thinkingOpen) { process.stderr.write("[recall: thinking"); thinkingOpen = true; }
@@ -739,7 +716,7 @@ async function apiCallStream(messages: any[], systemPrompt: string, modelSpec: s
     closeThinking();
     // Abort surfaces as a throw on some providers; treat it as a clean stop and
     // keep whatever already streamed to stdout.
-    if (execution?.signal?.aborted || err?.name === "AbortError") return "[recall: aborted]";
+    if (_cliAbortSignal?.aborted || err?.name === "AbortError") return "[recall: aborted]";
     const msg = err?.message || String(err);
     return `[recall: API error — ${msg.slice(0, 200)}]`;
   }
@@ -751,24 +728,7 @@ async function apiCallStream(messages: any[], systemPrompt: string, modelSpec: s
 // PUBLIC API
 // ============================================================================
 
-export async function recall(
-  ref: string,
-  question: string,
-  modelSpec: string | null = null,
-  options: RecallOptions = {},
-) {
-  return recallExecution.run(
-    { signal: options.signal, emitThinking: options.emitThinking },
-    () => recallInContext(ref, question, modelSpec, options),
-  );
-}
-
-async function recallInContext(
-  ref: string,
-  question: string,
-  modelSpec: string | null,
-  options: RecallOptions,
-) {
+export async function recall(ref: string, question: string, modelSpec: string | null = null, options: { context?: boolean; onChunk?: OnChunk; at?: string } = {}) {
   const type = refType(ref);
   const { onChunk } = options;
 
@@ -881,18 +841,14 @@ if (isMain) {
   // already streamed to stdout is preserved; the abort returns a marker that
   // is NOT re-printed (printed > 0 path) and is never cached.
   const abort = new AbortController();
+  _cliAbortSignal = abort.signal;
+  _cliEmitThinking = true;
   const onSignal = () => abort.abort();
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);
 
   try {
-    const answer = await recall(ref, question, modelSpec, {
-      context,
-      onChunk,
-      at,
-      signal: abort.signal,
-      emitThinking: true,
-    });
+    const answer = await recall(ref, question, modelSpec, { context, onChunk, at });
 
     // Hard-fail on provider error (e.g. overload/429). Surface to stderr, exit
     // non-zero — mirrors the non-streaming apiCall() error contract.
