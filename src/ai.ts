@@ -183,6 +183,7 @@ const MODEL_ALIASES: Record<string, Record<string, ModelFamily>> = {
   },
   sol: {
     "openai-codex": { prefix: "gpt", suffix: "sol" },
+    "bifrost-gpt": { prefix: "bedrock/openai.gpt", suffix: "sol" },
   },
 };
 
@@ -241,7 +242,7 @@ function escapeRegex(value: string): string {
 
 // Resolve a versioned family to the newest concrete model for a provider,
 // using the runtime's model list (built-in + extension-registered providers).
-function latestModelForFamilyRt(rt: any, provider: string, family: ModelFamily): Model | undefined {
+export function latestModelForFamilyRt(rt: any, provider: string, family: ModelFamily): Model | undefined {
   const prefix = typeof family === "string" ? family : family.prefix;
   const suffix = typeof family === "string" ? "" : `[-.]${escapeRegex(family.suffix)}`;
   const re = new RegExp(`^${escapeRegex(prefix)}[-.]([0-9]+(?:[-.][0-9]+)*)${suffix}$`);
