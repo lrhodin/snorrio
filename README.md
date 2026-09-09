@@ -62,3 +62,8 @@ Pi integration must be `current`, and `pi-herdr-subagents` must expose
 fresh Pi session. `subagents_list` must include `recall-digger`.
 
 MIT
+
+## Optional standalone extensions
+
+[OpenAI fast](docs/openai-fast.md) requests priority service for explicitly opted-in
+OpenAI models. It works without the memory stack and is disabled by default.
