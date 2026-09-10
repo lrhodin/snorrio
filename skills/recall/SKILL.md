@@ -8,9 +8,30 @@ Query past sessions and temporal summaries. Recall revives past context and answ
 
 ## Before you recall
 
-**Check your context first.** Your system prompt already contains temporal caches — today, this week, this month, this quarter, this year. Read them before calling any tool. The answer, or at least the right starting point, is often already in your context. Grep and recall are expensive; attention is free.
+**Pick the cheapest path that answers the question.**
 
-When recall IS needed, use your temporal context to pick the right entry point. Don't guess dates — your caches tell you which week or month a thread lived in.
+Temporal caches are plain markdown on disk; reading a layer is a file read,
+no model involved:
+
+| Ref | Path |
+|---|---|
+| day `YYYY-MM-DD` | `~/snorrio/cache/days/YYYY-MM-DD.md` |
+| week `YYYY-Www` | `~/snorrio/cache/weeks/YYYY-Www.md` |
+| month `YYYY-MM` | `~/snorrio/cache/months/YYYY-MM.md` |
+| quarter `YYYY-QN` | `~/snorrio/cache/quarters/YYYY-QN.md` |
+| year `YYYY` | `~/snorrio/cache/years/YYYY.md` |
+
+Session refs (UUID prefix / `.jsonl`) have no cache file — `recall <id>`
+revives the full transcript instead.
+
+Use `recall` when a file read can't answer: locating which day or session
+holds a fact, drilling the hierarchy, `--at` time travel, or verbatim
+reproduction. `recall` invokes an LLM, so multi-hop drills belong in the
+`recall-digger` subagent, not the orchestrator context.
+
+**Caches are paraphrase, not the record.** A promise, decision, command, or
+credential your answer depends on gets session-level recall or an explicit
+"summary, unverified" label. Don't assert specifics from a cache read.
 
 ## Prefer the `recall-digger` subagent
 

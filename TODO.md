@@ -38,8 +38,6 @@ Engineering backlog for the snorrio memory/recall system. Personal and cross-pro
 
 - [ ] **Manual ritual layer** — weekly/monthly/quarterly/yearly reviews written together by Ludvig and Colter. Manual versions supersede automated caches. The attention itself is the point — reading and writing the summary shapes the future. Yearly especially should be a sit-down ritual, not automated.
 
-- [ ] **Pure subagent mode** — `--pure` flag for subagents that skips temporal context injection. Env var `SNORRIO_CONTEXT=0` checked by dmn-context.ts. Use case: exploration without echo chamber. A session shaped for the task, not the narrative.
-
 - [ ] **PRM (People Relationship Management)** — skill + graph data store. Markdown files in `data/people/`, one per person. Trust/disclosure layer: different people get different context injection. Build after sync story is settled.
 
 ## Episodes & ingest

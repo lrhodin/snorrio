@@ -21,15 +21,13 @@ const TZ = "UTC";
 const T0 = Date.UTC(2026, 4, 2, 14, 30, 0);
 const STAMP_T0 = "Sat, May 2, 2:30 PM UTC";
 
-test("prompt composition uses freshly supplied date/context on every turn", () => {
+test("prompt composition uses the freshly supplied date on every turn", () => {
   const base = "Current date: 2026-08-23\nbase";
-  const first = composeInjectedPrompt(base, "2026-08-23", "setup-once", "cache-v1");
-  const second = composeInjectedPrompt(base, "2026-08-24", "setup-once", "cache-v2");
+  const first = composeInjectedPrompt(base, "2026-08-23", "setup-once");
+  const second = composeInjectedPrompt(base, "2026-08-24", "setup-once");
   assert.match(first, /Current date: 2026-08-23/);
-  assert.match(first, /cache-v1/);
+  assert.doesNotMatch(first, /Current date: 2026-08-24/);
   assert.match(second, /Current date: 2026-08-24/);
-  assert.match(second, /cache-v2/);
-  assert.doesNotMatch(second, /cache-v1/);
 });
 
 test("steady cadence — first and last stamped, no silence markers", () => {

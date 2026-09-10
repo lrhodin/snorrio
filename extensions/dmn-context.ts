@@ -1,11 +1,12 @@
-// Pi extension — checks setup at session start; refreshes temporal context each turn.
-// All temporal logic lives in src/context.ts. This is the pi glue.
+// Pi extension — checks setup at session start and stamps user messages with
+// local time. This is the pi glue.
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
 import { createSessionSetupCache, runSetupChecks } from "../src/setup-checks.ts";
+import { temporalRefs } from "../src/local-date.ts";
 import { createZoneResolver, tzJournalPath } from "../src/tz-journal.ts";
 
 const HOME = process.env.HOME!;
@@ -118,10 +119,9 @@ export function applyStamps(
   }
 }
 
-export function composeInjectedPrompt(base: string, today: string, setupMessage: string | null, temporalContext: string | null): string {
+export function composeInjectedPrompt(base: string, today: string, setupMessage: string | null): string {
   let prompt = base.replace(/Current date: \d{4}-\d{2}-\d{2}/, `Current date: ${today}`);
   if (setupMessage) prompt += "\n\n" + setupMessage + "\n";
-  if (temporalContext) prompt += "\n\n" + temporalContext + "\n";
   return prompt;
 }
 
@@ -141,19 +141,17 @@ export default function (pi: ExtensionAPI) {
     availableTools: pi.getAllTools().map((tool: any) => tool.name).filter(Boolean),
   }));
 
-  // Only subprocess-heavy setup checks are cached. Date refs and temporal
-  // caches are cheap local reads and refresh for every turn so a long-lived
-  // Herdr pane crosses midnight and observes newly generated cache files.
+  // Only subprocess-heavy setup checks are cached. Today's date is a cheap
+  // local read and refreshes for every turn so a long-lived Herdr pane
+  // crosses midnight and keeps stamping in the right zone.
   pi.on("session_start", () => { setup.run(); });
 
-  pi.on("before_agent_start", async (event) => {
-    const { loadContext, getDateRefs } = await import(join(PKG_ROOT, "src", "context.ts"));
+  pi.on("before_agent_start", (event) => {
     return {
       systemPrompt: composeInjectedPrompt(
         event.systemPrompt,
-        getDateRefs().today,
+        temporalRefs(new Date(), zoneFor(Date.now())).today,
         setup.current()?.message ?? null,
-        loadContext(),
       ),
     };
   });

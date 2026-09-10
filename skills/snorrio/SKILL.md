@@ -61,9 +61,9 @@ Options: `--model <alias>` (default: opus), `--context` (situated witness mode).
 
 **Recall pattern:** Start high, drill down. Week for "which day?", day for "which session?", session for exact details. Three hops to verbatim detail.
 
-### Context injection
+### Temporal caches are on-demand
 
-The Pi extension injects cached summaries for the current day, week, month, quarter, and year. It refreshes those cheap local reads before each turn, so long-lived Herdr sessions cross midnight and observe newly generated memory without a restart.
+Cached summaries live at `~/snorrio/cache/{days,weeks,months,quarters,years}/<ref>.md`. Read one directly for a layer; the recall skill carries the path table. Nothing is injected automatically.
 
 ### Local and private
 
@@ -80,7 +80,6 @@ Snorrio installs as a pi package. Skills and extensions are auto-discovered.
     recall-engine.ts
     ai.ts
     session-meta.ts
-    context.ts                     # shared context loading
     session-lineage.ts             # ancestry + evidence-dependency families
     cache-provenance.ts            # machine-readable temporal sidecars
   skills/                          # auto-discovered by pi
@@ -88,7 +87,7 @@ Snorrio installs as a pi package. Skills and extensions are auto-discovered.
   agents/                          # subagent definitions, symlinked into
     recall-digger.md               #   ~/.pi/agent/agents/ for discovery
   extensions/                      # auto-discovered by pi
-    dmn-context.ts                 # context injection + setup detection
+    dmn-context.ts                 # date refresh, timestamps, setup detection
     cross-model-thinking.ts
   bin/
     snorrio                        # CLI: flush, status, update
@@ -114,9 +113,9 @@ cannot.
 Two things to do before you start:
 
 **1. Understand what you are installing.** You should never install something you
-could not explain to your human. Read the daemon, the recall engine, the context
-injection, the skills. Then tell them what this is, how it will help you, how it
-will help them, and ask whether they have questions.
+could not explain to your human. Read the daemon, the recall engine, the
+skills. Then tell them what this is, how it will help you, how it will help
+them, and ask whether they have questions.
 
 **2. Check what is already true.** Every requirement may already be satisfied.
 `snorrio status` and `herdr status server` between them cover most of it, and the
