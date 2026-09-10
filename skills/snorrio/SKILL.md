@@ -22,10 +22,11 @@ The current memory and harness layers are installed and verified together. Setup
 is [`SETUP.md`](../../SETUP.md) — requirements addressed to an agent, not an
 installer. Snorrio requires the commit-pinned
 [`lrhodin/pi-herdr-subagents`](https://github.com/lrhodin/pi-herdr-subagents)
-fork at commit `f48e61facbf7738f4027d1d29959cd3480c8c0f3`, documented in
+fork at commit `46710fede54b7f3c196e9250f245b00cc784faa0`, documented in
 R5.4, not the upstream npm package: its recursive lineage, tool-policy
-persistence, and descendant-aware auto-exit are part of Snorrio’s
-provenance and delegation contract. `@ogulcancelik/pi-herdr` is an optional
+persistence, descendant-aware auto-exit, reload safety, pane cleanup, and
+parallel-spawn artifact isolation are part of Snorrio’s provenance and
+delegation contract. `@ogulcancelik/pi-herdr` is an optional
 control surface, not an architectural dependency.
 
 ## How it works

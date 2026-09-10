@@ -262,10 +262,10 @@ through supported Herdr commands.
 ### R5.4 — install Snorrio’s required `pi-herdr-subagents` fork
 
 Snorrio currently requires [lrhodin/pi-herdr-subagents](https://github.com/lrhodin/pi-herdr-subagents)
-pinned to commit `f48e61facbf7738f4027d1d29959cd3480c8c0f3`:
+pinned to commit `46710fede54b7f3c196e9250f245b00cc784faa0`:
 
 ```sh
-pi install git:github.com/lrhodin/pi-herdr-subagents@f48e61facbf7738f4027d1d29959cd3480c8c0f3
+pi install git:github.com/lrhodin/pi-herdr-subagents@46710fede54b7f3c196e9250f245b00cc784faa0
 ```
 
 Do **not** substitute `npm:pi-herdr-subagents` or the unpatched upstream Git
@@ -277,8 +277,11 @@ in upstream v0.2.0:
 - immutable root-to-self lineage and numeric recursion depth in child sessions;
 - recursive management tools remaining available when native `tools:` are restricted;
 - truthful, model-visible `spawning: false` policy;
-- persisted tool policy that cannot silently escalate on resume; and
-- auto-exit waiting for descendant completion instead of killing its watcher.
+- persisted tool policy that cannot silently escalate on resume;
+- auto-exit waiting for descendant completion instead of killing its watcher;
+- live watchers surviving `/reload` without retaining stale UI context;
+- cleanup treating an already-closed Herdr pane as success; and
+- per-spawn artifacts that cannot overwrite each other during parallel launches.
 
 It supplies `subagent`, `subagent_interrupt`, `subagent_resume`, and
 `subagents_list`. A local source path ending in `pi-herdr-subagents` is also
@@ -290,7 +293,7 @@ then install the pinned fork without disturbing unrelated packages. For example:
 
 ```sh
 pi remove npm:pi-herdr-subagents
-pi install git:github.com/lrhodin/pi-herdr-subagents@f48e61facbf7738f4027d1d29959cd3480c8c0f3
+pi install git:github.com/lrhodin/pi-herdr-subagents@46710fede54b7f3c196e9250f245b00cc784faa0
 ```
 
 **Why a pin and not a moving ref.** Pinned refs are not advanced by
