@@ -63,6 +63,10 @@ fresh Pi session. `subagents_list` must include `recall-digger`.
 
 MIT
 
+## Integration testing
+
+[Integration Testing](docs/integration-testing.md) describes the live-agent validation procedure and reusable Markdown test assignments for contributors.
+
 ## Optional standalone extensions
 
 [OpenAI fast](docs/openai-fast.md) requests priority service for explicitly opted-in

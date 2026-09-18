@@ -53,19 +53,19 @@ Run it inline yourself only when the answer is **one hop away** — a known day 
 session id, single question, no searching. Anything requiring "which period was
 this in?" should be delegated.
 
-**Resume the digger for follow-ups — don't spawn a fresh one.** Every completion
-message carries a `sessionPath`; pass it to `subagent_resume` with a `message`.
-The original agent still holds the map: which levels it already searched, which
-returned nothing, the query shapes that worked, and the pitfalls it hit. A new
-agent re-derives all of it and can repeat a subtle mistake the first one already
-found and fixed.
+**Reuse the digger’s history for follow-ups, not a fresh conversation.** After
+its process exits, pass the completion’s `sessionPath` and a `message` to
+`subagent_resume`. This launches a new process and pane with the old transcript;
+it does not send to an existing agent. An interrupted agent is still open:
+steer that live pane or have it finish and exit before resuming; never run two
+writers on the same session. The transcript preserves searched levels, dead ends, and pitfalls.
 
 ```
 subagent_resume({ sessionPath: "<path from the completion message>",
                   message: "Follow-up: ..." })
 ```
 
-`auto-exit: true` does not prevent this — it ends the session, but the transcript
+`auto-exit: true` does not prevent this — it exits the process, but the transcript
 persists and is the resume target. A digger can also call `caller_ping` to ask
 you a clarifying question mid-dig: it exits, you get notified, and you resume it
 with the answer rather than letting it guess.

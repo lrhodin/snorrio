@@ -16,7 +16,15 @@ or permanently defined by one optional Pi control package.
 
 Snorrio fixes this. A daemon watches your sessions. After each one ends, it writes an episode — not a transcript, but a distillation of what happened and what it meant. Those episodes become the raw material for memory at every scale: days, weeks, months, quarters.
 
-**The harness.** Memory answers *what happened before*. The harness is *how work happens now*: [herdr](https://herdr.dev) holds persistent panes and tabs, keeps agents alive across a disconnect, resumes their conversations after a restart, and runs subagents in their own visible terminals instead of hidden inside a tool call. You can watch a subagent work and steer it mid-task.
+**The harness.** Memory answers *what happened before*; [herdr](https://herdr.dev)
+holds live processes in panes and tabs. A transcript is not a process:
+`subagent_resume` opens a new process/pane using saved history, not a message to
+the old one. `subagent_interrupt` cancels a turn but leaves its process/tab open
+and tracked. Steer that pane in place; resume history only after its process exits.
+Herdr `done` means ready for input, not published completion; ask an interactive
+helper to report and call `subagent_done` before manual cleanup. The footer
+counts tracked agents, not unique transcripts. For requested pane control, read
+`herdr --skill` and use live IDs; do not infer identity from session paths.
 
 The current memory and harness layers are installed and verified together. Setup
 is [`SETUP.md`](../../SETUP.md) — requirements addressed to an agent, not an
