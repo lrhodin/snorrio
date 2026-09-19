@@ -1,0 +1,8 @@
+{
+  "name": "snorrio-jev",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node --test jev.test.mjs" },
+  "engines": { "node": ">=22" },
+  "dependencies": { "ai": "7.0.107" }
+}

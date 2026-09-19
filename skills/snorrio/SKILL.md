@@ -92,7 +92,7 @@ Snorrio installs as a pi package. Skills and extensions are auto-discovered.
     session-lineage.ts             # ancestry + evidence-dependency families
     cache-provenance.ts            # machine-readable temporal sidecars
   skills/                          # auto-discovered by pi
-    recall/  snorrio/  dmn/  llm-pipe/  handoff/
+    recall/  snorrio/  dmn/  llm-pipe/  handoff/  jev/
   agents/                          # subagent definitions, symlinked into
     recall-digger.md               #   ~/.pi/agent/agents/ for discovery
   extensions/                      # auto-discovered by pi
