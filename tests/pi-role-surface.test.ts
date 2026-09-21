@@ -10,9 +10,9 @@
 //
 // Where pi's role union lives (inspected, not hard-coded blindly):
 //   - Base LLM roles: pi-ai `dist/types.d.ts` —
-//       `type Message = UserMessage | AssistantMessage | ToolResultMessage`
-//     each member an interface with a `role: "user" | "assistant" | "toolResult"`
-//     string-literal discriminant.
+//       `type Message = SystemMessage | UserMessage | AssistantMessage | ToolResultMessage`
+//     each member an interface with a `role: "system" | "user" | "assistant" |
+//     "toolResult"` string-literal discriminant. (`system` arrived in pi 0.86+.)
 //   - Control roles: pi-coding-agent `dist/core/messages.d.ts` — interfaces with
 //     `role: "bashExecution" | "custom" | "branchSummary" | "compactionSummary"`,
 //     registered into the AgentMessage union via a declaration-merge:
@@ -20,7 +20,7 @@
 //          interface CustomAgentMessages { bashExecution: ...; custom: ...; ... } }`
 //
 // So pi's full emittable role set = every `role: "<lit>"` discriminant in its
-// d.ts, which scans cleanly to exactly those 7 literals with no pollution. We
+// d.ts, which scans cleanly to exactly those 8 literals with no pollution. We
 // also union in the KEYS of every `interface CustomAgentMessages { ... }` block
 // (pi's explicit control-role registry) as a belt-and-suspenders signal.
 

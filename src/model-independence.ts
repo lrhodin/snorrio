@@ -81,11 +81,15 @@ export function dropForeignThinking<T extends Msg>(
 // ("bashExecution", "branchSummary", "compactionSummary", "custom"), and the
 // summary/bash kinds have NO `content` field at all — so they are not valid LLM
 // messages and must not reach a provider as-is (their roles aren't understood and
-// they'd send empty content). This path runs only at recall + DMN read time,
-// never live, so snorrio owns the editorial choice of how to present this
-// bookkeeping to a reader model. We do it structurally (matched on role + fields)
-// without importing pi's types or its convertToLlm() — same decoupling stance as
-// the rest of this file and ai.ts: pi is a runtime-global, untyped dependency.
+// they'd send empty content). pi 0.86+ additionally yields a `system` role
+// (pi-ai `SystemMessage`): the leading system prompt plus later mid-conversation
+// instruction/prompt-section/tool updates. It has real content, but on this read
+// path it is treated as instruction material to render, not replay. This path
+// runs only at recall + DMN read time, never live, so snorrio owns the editorial
+// choice of how to present this bookkeeping to a reader model. We do it
+// structurally (matched on role + fields) without importing pi's types or its
+// convertToLlm() — same decoupling stance as the rest of this file and ai.ts: pi
+// is a runtime-global, untyped dependency.
 
 // The real conversational roles pi emits for LLM messages. These are
 // `pi-ai`'s `Message` union discriminants (UserMessage | AssistantMessage |
@@ -98,13 +102,30 @@ export const CONVERSATIONAL_ROLES = new Set(["user", "assistant", "toolResult"])
 // (see pi-coding-agent `dist/core/messages.d.ts`).
 export const CONTROL_ROLES = new Set(["bashExecution", "branchSummary", "compactionSummary", "custom"]);
 
+// pi's `system` role (pi-ai `SystemMessage`) is a real LLM role, not one of the
+// pi-coding-agent bookkeeping kinds above, so it gets its OWN set rather than
+// being folded into CONTROL_ROLES (whose comment promises exactly the
+// declaration-merged CustomAgentMessages keys). snorrio still does not forward it
+// as a provider system turn on the read path: mid-conversation system support is
+// provider-dependent (some providers rebuild the leading prompt from a replay,
+// others reject a system message mid-transcript), and this path only feeds
+// summarization readers, not a provider replay. Its `sections` / `toolsAdded` /
+// `toolsRemoved` describe replay state a summarizing reader doesn't need, so they
+// are deliberately ignored.
+export const INSTRUCTION_ROLES = new Set(["system"]);
+
 // SINGLE SOURCE OF TRUTH: every session role snorrio knows how to handle =
-// the conversational allowlist + the known control roles. The runtime
-// allowlist-flip in normalizeSessionMessages() and the build-time d.ts canary
-// (tests/pi-role-surface.test.ts) both consume THIS const so they can't drift.
-// Any role pi can emit that is NOT in here is an unknown role: the canary fails
-// at build time, and the runtime fails safe (never forwards it raw).
-export const KNOWN_PI_ROLES: ReadonlySet<string> = new Set([...CONVERSATIONAL_ROLES, ...CONTROL_ROLES]);
+// the conversational allowlist + the known control roles + the system
+// instruction role. The runtime allowlist-flip in normalizeSessionMessages() and
+// the build-time d.ts canary (tests/pi-role-surface.test.ts) both consume THIS
+// const so they can't drift. Any role pi can emit that is NOT in here is an
+// unknown role: the canary fails at build time, and the runtime fails safe (never
+// forwards it raw).
+export const KNOWN_PI_ROLES: ReadonlySet<string> = new Set([
+  ...CONVERSATIONAL_ROLES,
+  ...CONTROL_ROLES,
+  ...INSTRUCTION_ROLES,
+]);
 
 // Warn at most once per distinct unknown role. Module-level so the dedupe spans
 // every normalizeSessionMessages() call in the process (recall + DMN read paths).
@@ -128,6 +149,9 @@ function warnOncePerRole(role: string): void {
 // constants — we don't couple to pi strings, we choose how to present them).
 const BRANCH_SUMMARY_LABEL = "[summary of a branch this conversation returned from]";
 const COMPACTION_SUMMARY_LABEL = "[summary of earlier conversation history that was compacted]";
+// pi's `system` role covers both the leading system prompt and later instruction
+// updates; we don't track which is which, so the label reads correctly for both.
+const SYSTEM_INSTRUCTION_LABEL = "[system instructions for the agent]";
 
 // The raw, loose shape pi hands us at the buildSessionContext() boundary. Index
 // signature lets the normalizer read control-message fields (.summary, .command)
@@ -198,7 +222,19 @@ export function normalizeSessionMessages(messages: RawSessionMessage[]): Message
       continue;
     }
 
-    // (3) UNKNOWN role — the allowlist-flip's fail-safe default. snorrio does NOT
+    // (3) pi `system` message: the leading system prompt or a later instruction
+    // update. Convert to labelled readable text — same reader-model framing as
+    // branch/compaction summaries. `sections`/`toolsAdded`/`toolsRemoved` are
+    // ignored (see INSTRUCTION_ROLES).
+    if (INSTRUCTION_ROLES.has(role)) {
+      const systemText = contentToText(m.content).trim();
+      if (systemText) {
+        out.push({ role: "user", content: `${SYSTEM_INSTRUCTION_LABEL}\n${systemText}`, timestamp: m.timestamp });
+      }
+      continue;
+    }
+
+    // (4) UNKNOWN role — the allowlist-flip's fail-safe default. snorrio does NOT
     // forward a role it doesn't understand to a provider: a future pi control
     // role could carry no `content` (=> provider 400) or non-conversational junk.
     // Warn once, then salvage any readable text as a plain user turn or drop it.

@@ -219,6 +219,39 @@ test("allowlist-flip: custom honors excludeFromContext consistently with bashExe
   assert.equal(out.length, 1, "both excluded control messages dropped");
 });
 
+test("allowlist-flip: pi `system` role renders as labelled instruction text (no unknown-role warning)", () => {
+  const raw = [
+    { role: "system", content: "You are a helpful assistant.", timestamp: 1 },
+    { role: "user", content: "hi", timestamp: 2 },
+    // Mid-conversation update: instruction plus prompt sections and tool changes.
+    // Those structured replay fields are deliberately ignored on the read path.
+    {
+      role: "system",
+      content: "From now on, answer in bullet points.",
+      sections: { style: "terse" },
+      toolsAdded: [{ name: "edit" }],
+      toolsRemoved: [{ name: "bash" }],
+      timestamp: 3,
+    },
+    // SystemMessage.content is a `string | TextContent[]` union; the array shape
+    // must render through contentToText() too.
+    { role: "system", content: [{ type: "text", text: "Additional instruction." }], timestamp: 4 },
+  ];
+
+  let out: any[] = [];
+  const writes = captureStderr(() => { out = normalizeSessionMessages(raw as any); });
+
+  // `system` is a known instruction role now: no unknown-role warning fires.
+  assert.equal(writes.length, 0, "no unknown-role warning for the system role");
+  // It is converted to user text, never forwarded as a provider system turn.
+  assert.ok(out.every((m) => m.role === "user"), "system messages normalized to user turns");
+
+  const text = out.map((m) => (typeof m.content === "string" ? m.content : "")).join("\n");
+  assert.match(text, /\[system instructions for the agent\]\nYou are a helpful assistant\./, "leading prompt labelled + preserved");
+  assert.match(text, /\[system instructions for the agent\]\nFrom now on, answer in bullet points\./, "mid-conversation update rendered");
+  assert.match(text, /Additional instruction\./, "TextContent[] content rendered");
+});
+
 test("sessionMessagesToLlm: composes normalization + readable-thinking", () => {
   const raw = [
     { role: "assistant", content: [
