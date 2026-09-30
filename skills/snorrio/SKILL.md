@@ -1,6 +1,6 @@
 ---
 name: snorrio
-description: This skill should be used when the user mentions snorrio, memory, recall, remembering past sessions, the herdr harness, or when you detect snorrio is installed but not fully configured. Covers what snorrio is, how memory and the harness fit together, setup, and first-session onboarding.
+description: This skill should be used when the user mentions snorrio, memory, recall, remembering past sessions, the herdr harness, or when you detect snorrio is installed but not fully configured. Also use when changing subagent model defaults or per-agent model overrides. Covers what snorrio is, how memory and the harness fit together, setup, and first-session onboarding.
 version: 1.0.0
 ---
 
@@ -36,6 +36,37 @@ persistence, descendant-aware auto-exit, reload safety, pane cleanup, and
 parallel-spawn artifact isolation are part of Snorrio’s provenance and
 delegation contract. `@ogulcancelik/pi-herdr` is an optional
 control surface, not an architectural dependency.
+
+## Subagent model defaults
+
+For the standard Pi-managed installation, edit
+`~/.pi/agent/git/github.com/lrhodin/pi-herdr-subagents/config.json`.
+This package-local file is **gitignored**, intended for machine-specific overrides.
+If installed elsewhere, locate the loaded package in `~/.pi/agent/settings.json`;
+use its root `config.json`, not an unrelated source checkout.
+
+- `models.default`: fallback model for subagents, including unnamed spawns.
+- `models.agents.<name>`: default for a named agent.
+- Precedence: explicit tool argument → agent frontmatter → per-agent config →
+  global subagent default → parent model.
+- Resolve the requested model with `list_models`; use its exact authenticated
+  `provider/model-id`. Keep the chosen model in local config, not this skill.
+- Read existing config and merge only the requested setting. If absent, start
+  from the package's `config.json.example`, then merge the model setting.
+  **`status: { "enabled": true }` is required** (preserve `false` if configured).
+  A models-only file parses as JSON but prevents the extension from loading.
+  Preserve status settings and other agent overrides.
+- Validate with both real loaders, not just JSON parsing. From the package root:
+  `node --input-type=module -e 'import {loadModelConfig} from "./pi-extension/subagents/model-config.ts"; import {loadStatusConfig} from "./pi-extension/subagents/status.ts"; loadModelConfig(); loadStatusConfig(); console.log("Config valid");'`
+  This uses Node's TypeScript support. Loader validation is not a full Pi startup test.
+- Do not change Pi's `defaultModel`/`defaultProvider`: those select the main
+  assistant. Thinking is separate (tool argument → agent frontmatter → parent).
+- This extension loads model config at module initialization. Start a new Pi
+  session to reliably load changes; do not interrupt active children to do so.
+
+Use configured defaults when spawning; supply a model override only for a
+concrete task requirement. Agent-frontmatter pins still win over config defaults.
+See the subagent package README's Configuration section for the full schema.
 
 ## How it works
 
@@ -81,6 +112,8 @@ Memory, configuration, and session history stay on your machine. Model requests 
 ## Architecture
 
 Snorrio installs as a pi package. Skills and extensions are auto-discovered.
+The pi-managed clone is the working copy: develop, test, and commit there, since
+it is the code pi loads. A separate source checkout drifts behind it.
 
 ```
 ~/.pi/agent/git/github.com/lrhodin/snorrio/   # pi-managed clone (code only)
