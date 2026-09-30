@@ -111,7 +111,7 @@ export function piRoot(): string | null {
 // coding-agent's AuthStorage were removed. Model resolution, provider auth,
 // and completion now live behind a single `Models` implementation:
 // ModelRuntime. We obtain one via createAgentSessionServices() so that
-// extension-registered providers (e.g. a bifrost gateway) and their auth are
+// extension-registered providers (e.g. the LangSmith gateway) and their auth are
 // loaded exactly as they are for an interactive pi session — snorrio sees the
 // same models the user does.
 let _piAgent: any;
@@ -158,33 +158,21 @@ export const CONFIG_DIR = join(SNORRIO_HOME, "config");
 export const CONFIG_PATH = join(CONFIG_DIR, "config.json");
 const PI_SETTINGS_PATH = join(HOME, ".pi/agent/settings.json");
 
-// Aliases map a model *type* to a versioned family per provider — NOT a pinned
-// version. A string describes families whose version follows the name
-// (claude-opus-4.8); prefix/suffix describes families whose version sits in
-// the middle (gpt-5.6-sol). resolveAlias() picks the newest registry match, so
-// version numbers never have to be hand-edited by callers.
-type ModelFamily = string | { prefix: string; suffix: string };
-const MODEL_ALIASES: Record<string, Record<string, ModelFamily>> = {
-  opus: {
-    "anthropic": "claude-opus",
-    "github-copilot": "claude-opus",
-  },
-  sonnet: {
-    "anthropic": "claude-sonnet",
-    "github-copilot": "claude-sonnet",
-  },
-  haiku: {
-    "anthropic": "claude-haiku",
-    "github-copilot": "claude-haiku",
-  },
-  fable: {
-    "anthropic": "claude-fable",
-    "github-copilot": "claude-fable",
-  },
-  sol: {
-    "openai-codex": { prefix: "gpt", suffix: "sol" },
-    "bifrost-gpt": { prefix: "bedrock/openai.gpt", suffix: "sol" },
-  },
+// Aliases map a model *type* to a versioned family — NOT a pinned version, and
+// NOT a provider. `name` is the family stem and the version follows it
+// (claude-opus-4.8); `suffix` covers families whose version sits in the middle
+// (gpt-6-sol). The family may sit behind any gateway prefix ending in "/" or
+// "." (anthropic/claude-opus-5-5, bedrock/openai.gpt-6-sol), so a gateway's
+// provider name never has to appear here. resolveAlias() walks providers in
+// preference order and picks the newest match, so version numbers never have
+// to be hand-edited by callers.
+type ModelFamily = { name: string; suffix?: string };
+const MODEL_ALIASES: Record<string, ModelFamily> = {
+  opus: { name: "claude-opus" },
+  sonnet: { name: "claude-sonnet" },
+  haiku: { name: "claude-haiku" },
+  fable: { name: "claude-fable" },
+  sol: { name: "gpt", suffix: "sol" },
 };
 
 // Compare two numeric version tuples (e.g. [4,8] vs [4,7]); missing trailing
@@ -243,9 +231,8 @@ function escapeRegex(value: string): string {
 // Resolve a versioned family to the newest concrete model for a provider,
 // using the runtime's model list (built-in + extension-registered providers).
 export function latestModelForFamilyRt(rt: any, provider: string, family: ModelFamily): Model | undefined {
-  const prefix = typeof family === "string" ? family : family.prefix;
-  const suffix = typeof family === "string" ? "" : `[-.]${escapeRegex(family.suffix)}`;
-  const re = new RegExp(`^${escapeRegex(prefix)}[-.]([0-9]+(?:[-.][0-9]+)*)${suffix}$`);
+  const suffix = family.suffix ? `[-.]${escapeRegex(family.suffix)}` : "";
+  const re = new RegExp(`(?:^|[/.])${escapeRegex(family.name)}[-.]([0-9]+(?:[-.][0-9]+)*)${suffix}$`);
   let best: { model: Model; ver: number[] } | undefined;
   for (const model of (rt.getModels(provider) as Model[])) {
     const m = model.id.match(re);
@@ -255,6 +242,14 @@ export function latestModelForFamilyRt(rt: any, provider: string, family: ModelF
     if (!best || compareVersion(ver, best.ver) > 0) best = { model, ver };
   }
   return best?.model;
+}
+
+// Providers to search for an alias: the caller's preferred provider, then the
+// configured preference order, then every other registered provider.
+export function aliasProviderOrder(rt: any, preferredProvider: string | null, preference: string[]): string[] {
+  const all = (rt.getProviders() as Array<{ id: string }>).map(p => p.id);
+  const order = [preferredProvider, ...preference, ...all.slice().sort()].filter((p): p is string => !!p);
+  return [...new Set(order)].filter(p => all.includes(p));
 }
 
 export async function resolveModel(spec: string | null = null, toolName: string | null = null): Promise<Resolved> {
@@ -275,7 +270,7 @@ export async function resolveModel(spec: string | null = null, toolName: string 
   let model: Model | undefined;
 
   if (effectiveSpec?.includes("/")) {
-    // provider/modelId. modelId may itself contain "/" (e.g. bifrost's
+    // provider/modelId. modelId may itself contain "/" (e.g. the gateway's
     // "bedrock/us.anthropic.claude-opus-4-8"), so split only on the first "/".
     const slash = effectiveSpec.indexOf("/");
     const provider = effectiveSpec.slice(0, slash);
@@ -320,26 +315,16 @@ export async function resolveModel(spec: string | null = null, toolName: string 
 }
 
 async function resolveAlias(alias: string, preferredProvider: string | null, rt: any): Promise<Model> {
-  const providerMap = MODEL_ALIASES[alias];
-  if (!providerMap) throw new Error(`Unknown alias: ${alias}`);
+  const family = MODEL_ALIASES[alias];
+  if (!family) throw new Error(`Unknown alias: ${alias}`);
 
-  if (preferredProvider && providerMap[preferredProvider]) {
-    if (await hasAuth(preferredProvider)) {
-      const model = latestModelForFamilyRt(rt, preferredProvider, providerMap[preferredProvider]);
-      if (model) return model;
-    }
+  for (const provider of aliasProviderOrder(rt, preferredProvider, getProviderPreference())) {
+    if (!(await hasAuth(provider))) continue;
+    const model = latestModelForFamilyRt(rt, provider, family);
+    if (model) return model;
   }
 
-  for (const provider of getProviderPreference()) {
-    if (!providerMap[provider]) continue;
-    if (await hasAuth(provider)) {
-      const model = latestModelForFamilyRt(rt, provider, providerMap[provider]);
-      if (model) return model;
-    }
-  }
-
-  const providers = Object.keys(providerMap).join(", ");
-  throw new Error(`No '${alias}' model available. Need a registry match for family '${alias}' on one of: ${providers} (and auth). Run: pi then /login`);
+  throw new Error(`No '${alias}' model available: no authenticated provider serves a '${family.name}${family.suffix ? `-*-${family.suffix}` : ""}' model. Run: pi then /login`);
 }
 
 // --- LLM Calls ---
