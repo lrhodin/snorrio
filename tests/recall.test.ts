@@ -281,5 +281,12 @@ test("recall-engine retrieval invariants", async (t) => {
 
     assert.equal(monthHasData("2026-03"), true);
     assert.equal(monthHasData("2025-12"), false);
+
+    // A week shared across a month boundary must not lend data to the month
+    // its episodes are not in: 2026-09-28 is the Monday of W40 (Sep 28-Oct 4).
+    writeEpisode("2026-09-28", "boundary", header("boundary", "2026-09-28", "10:00"));
+    assert.equal(weekHasData("2026-W40"), true);
+    assert.equal(monthHasData("2026-09"), true);
+    assert.equal(monthHasData("2026-10"), false);
   });
 });

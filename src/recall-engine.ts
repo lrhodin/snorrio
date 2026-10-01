@@ -26,7 +26,7 @@ import { resolveShaAt, readFileAtSha } from "./versioned-read.ts";
 import { getSessionLineageIndex, resolveLineageSession } from "./session-lineage.ts";
 import { temporalRefs } from "./local-date.ts";
 import { createZoneResolver, tzJournalPath } from "./tz-journal.ts";
-import { monthWeeks, quarterMonths, weekDates, yearQuarters } from "./date-ranges.ts";
+import { monthDates, monthWeeks, quarterMonths, weekDates, yearQuarters } from "./date-ranges.ts";
 import { ensureCacheProvenanceManifest, writeCacheWithProvenance, type CacheLevel, type CacheProvenanceManifest } from "./cache-provenance.ts";
 import { prepareTemporalNarrativeSource, TEMPORAL_NARRATIVE_INSTRUCTIONS } from "./temporal-narrative.ts";
 
@@ -523,9 +523,12 @@ You operate at month resolution. Preserve shifts, themes, and direction without 
 // QUARTER RECALL — load month summaries as context
 // ============================================================================
 
+// A month has data only if one of its own dates does. Checking the weeks that
+// touch it is wrong: an ISO week shared with the previous month (W40 runs
+// Sep 28-Oct 4) would make October "have data" from September episodes, and
+// recall would write an October/Q4 narrative before October began.
 function monthHasData(monthStr: string) {
-  const weeks = monthWeeks(monthStr);
-  return weeks.some(w => weekHasData(w));
+  return monthDates(monthStr).some(d => loadEpisodes(d).length > 0);
 }
 
 async function recallQuarter(quarterStr: string, question: string, modelSpec: string | null, onChunk?: OnChunk, atSha?: string | null) {
