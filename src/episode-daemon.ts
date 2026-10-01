@@ -56,7 +56,8 @@ import {
 import { getSessionLineageIndex, type SessionLineage, type SessionLineageIndex } from "./session-lineage.ts";
 import { buildEpisodeFrontmatter, defaultMachine, type EpisodeLocalDate } from "./episode-frontmatter.ts";
 import { migrateEpisodeLocalDates } from "./local-date-migration.ts";
-import { cacheManifestNeedsRefresh, writeCacheWithProvenance, type CacheLevel } from "./cache-provenance.ts";
+import { cacheManifestNeedsRefresh, cacheNeedsClosingRebuild, writeCacheWithProvenance, type CacheLevel } from "./cache-provenance.ts";
+import { periodState } from "./period-state.ts";
 import { migrateProvenanceMetadata, planProvenanceRecascade, writeProvenanceRecascadeMarker } from "./provenance-migration.ts";
 import { externalLineageSessionCandidates, lineageSessionCandidates } from "./session-candidates.ts";
 import { TEMPORAL_NARRATIVE_INSTRUCTIONS, temporalNarrativeViolation } from "./temporal-narrative.ts";
@@ -354,11 +355,11 @@ async function generateEpisode(filePath: string) {
 // TEMPORAL HELPERS
 // ============================================================================
 
-const CACHE_Q_DAY = "Tell the story of today as a coherent narrative, not a checklist or audit report. What was worked on, what got decided, what changed, and why? Track immediate commitments naturally. Keep internal source mechanics entirely invisible." + TEMPORAL_NARRATIVE_INSTRUCTIONS;
-const CACHE_Q_WEEK = "Write a narrative of this week so far. What threads are developing, what started or stalled, and what is the trajectory? Carry work in flight across day boundaries without turning the answer into an index or audit report." + TEMPORAL_NARRATIVE_INSTRUCTIONS;
-const CACHE_Q_MONTH = "Write a narrative of this month so far. What shifted, what themes emerged or faded, and what is shaping the direction? Surface what is visible across weeks without turning the answer into an index or audit report." + TEMPORAL_NARRATIVE_INSTRUCTIONS;
-const CACHE_Q_QUARTER = "Write a narrative of this quarter so far. What is the arc, what materialized that was not there at the start, and what is building? Surface what is visible across months without turning the answer into an index or audit report." + TEMPORAL_NARRATIVE_INSTRUCTIONS;
-const CACHE_Q_YEAR = "Write a narrative of this year so far. Carry every real thread forward at the right altitude. Ground claims in the supplied summaries, preserve unresolved outcomes, and surface the through-line, transformations, and cross-quarter tensions without turning the answer into an index or audit report." + TEMPORAL_NARRATIVE_INSTRUCTIONS;
+const CACHE_Q_DAY = "Tell the story of this day as a coherent narrative, not a checklist or audit report. What was worked on, what got decided, what changed, and why? Track immediate commitments naturally. Keep internal source mechanics entirely invisible." + TEMPORAL_NARRATIVE_INSTRUCTIONS;
+const CACHE_Q_WEEK = "Write a narrative of this week. What threads developed, what started or stalled, and what is the trajectory? Carry work in flight across day boundaries without turning the answer into an index or audit report." + TEMPORAL_NARRATIVE_INSTRUCTIONS;
+const CACHE_Q_MONTH = "Write a narrative of this month. What shifted, what themes emerged or faded, and what shaped the direction? Surface what is visible across weeks without turning the answer into an index or audit report." + TEMPORAL_NARRATIVE_INSTRUCTIONS;
+const CACHE_Q_QUARTER = "Write a narrative of this quarter. What is the arc, what materialized that was not there at the start, and what was building? Surface what is visible across months without turning the answer into an index or audit report." + TEMPORAL_NARRATIVE_INSTRUCTIONS;
+const CACHE_Q_YEAR = "Write a narrative of this year. Carry every real thread forward at the right altitude. Ground claims in the supplied summaries, preserve unresolved outcomes, and surface the through-line, transformations, and cross-quarter tensions without turning the answer into an index or audit report." + TEMPORAL_NARRATIVE_INSTRUCTIONS;
 
 async function cascadeForDate(dateStr: string) {
   // Only called in live mode (debounce path) — _skipCascade gates this.
@@ -392,6 +393,11 @@ async function rebuildCache(
     day: CACHE_Q_DAY, week: CACHE_Q_WEEK, month: CACHE_Q_MONTH,
     quarter: CACHE_Q_QUARTER, year: CACHE_Q_YEAR,
   };
+  // A period that has not started has nothing to summarize. Refusing here,
+  // not just at write time, avoids a wasted LLM call per future ref.
+  const future = refs.filter(ref => periodState(level, ref) === "future");
+  if (future.length) log(`${prefix}  Skipping ${level} not yet started: ${future.join(", ")}`);
+  refs = refs.filter(ref => !future.includes(ref));
   if (refs.length === 0) return [];
   log(`${prefix}  Rebuilding ${refs.length} ${level} cache${refs.length > 1 ? "s" : ""}`);
 
@@ -488,7 +494,7 @@ async function validateCaches(prefix: string = "") {
   for (const [week, days] of weekDays) {
     const wt = mtime(cachePath("week", week));
     const newest = Math.max(...days.map(d => mtime(cachePath("day", d))));
-    if (newest > wt || cacheManifestNeedsRefresh("week", week, newest, { lineageIndex: activeLineageIndex ?? undefined })) staleWeeks.push(week);
+    if (newest > wt || cacheManifestNeedsRefresh("week", week, newest, { lineageIndex: activeLineageIndex ?? undefined }) || cacheNeedsClosingRebuild("week", week)) staleWeeks.push(week);
   }
   if (staleWeeks.length) await rebuildCache("week", staleWeeks.sort(), prefix);
 
@@ -510,7 +516,7 @@ async function validateCaches(prefix: string = "") {
   for (const [month, weeks] of monthWeeks) {
     const mt = mtime(cachePath("month", month));
     const newest = Math.max(...weeks.map(w => mtime(cachePath("week", w))));
-    if (newest > mt || cacheManifestNeedsRefresh("month", month, newest, { lineageIndex: activeLineageIndex ?? undefined })) staleMonths.push(month);
+    if (newest > mt || cacheManifestNeedsRefresh("month", month, newest, { lineageIndex: activeLineageIndex ?? undefined }) || cacheNeedsClosingRebuild("month", month)) staleMonths.push(month);
   }
   if (staleMonths.length) await rebuildCache("month", staleMonths.sort(), prefix);
 
@@ -526,7 +532,7 @@ async function validateCaches(prefix: string = "") {
   for (const [quarter, months] of quarterMonths) {
     const qt = mtime(cachePath("quarter", quarter));
     const newest = Math.max(...months.map(m => mtime(cachePath("month", m))));
-    if (newest > qt || cacheManifestNeedsRefresh("quarter", quarter, newest, { lineageIndex: activeLineageIndex ?? undefined })) staleQuarters.push(quarter);
+    if (newest > qt || cacheManifestNeedsRefresh("quarter", quarter, newest, { lineageIndex: activeLineageIndex ?? undefined }) || cacheNeedsClosingRebuild("quarter", quarter)) staleQuarters.push(quarter);
   }
   if (staleQuarters.length) {
     for (const q of staleQuarters.sort()) await rebuildCache("quarter", [q], prefix);
@@ -544,7 +550,7 @@ async function validateCaches(prefix: string = "") {
   for (const [year, quarters] of yearQuartersMap) {
     const yt = mtime(cachePath("year", year));
     const newest = Math.max(...quarters.map(q => mtime(cachePath("quarter", q))));
-    if (newest > yt || cacheManifestNeedsRefresh("year", year, newest, { lineageIndex: activeLineageIndex ?? undefined })) staleYears.push(year);
+    if (newest > yt || cacheManifestNeedsRefresh("year", year, newest, { lineageIndex: activeLineageIndex ?? undefined }) || cacheNeedsClosingRebuild("year", year)) staleYears.push(year);
   }
   if (staleYears.length) {
     for (const y of staleYears.sort()) await rebuildCache("year", [y], prefix);

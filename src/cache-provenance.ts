@@ -7,6 +7,7 @@ import { buildEpisodeIndex, type EpisodeIndex } from "./episode-index.ts";
 import { getSessionLineageIndex, type SessionLineageIndex } from "./session-lineage.ts";
 import { SNORRIO_HOME } from "./ai.ts";
 import { normalizeTemporalNarrative, temporalNarrativeViolation } from "./temporal-narrative.ts";
+import { periodState } from "./period-state.ts";
 
 export const CACHE_PROVENANCE_SCHEMA_VERSION = 1;
 export type CacheLevel = "day" | "week" | "month" | "quarter" | "year";
@@ -24,6 +25,13 @@ export interface CacheProvenanceManifest {
   ref: string;
   coveredRefs: string[];
   families: CacheProvenanceFamily[];
+  /**
+   * Whether the period was open or closed when its summary was WRITTEN. Absent
+   * on legacy sidecars. Not part of the evidence comparison (sameManifest): it
+   * describes the prose, not the inputs, so it must never mark a cache stale
+   * on its own — only the closing-rebuild check reads it.
+   */
+  periodState?: "open" | "closed";
 }
 
 const LEVEL_DIRS: Record<CacheLevel, string> = {
@@ -131,14 +139,16 @@ export function writeCacheWithProvenance(
   level: CacheLevel,
   ref: string,
   summary: string,
-  options: { cacheDir?: string; episodesDir?: string; lineageIndex?: SessionLineageIndex; episodeIndex?: EpisodeIndex } = {},
+  options: { cacheDir?: string; episodesDir?: string; lineageIndex?: SessionLineageIndex; episodeIndex?: EpisodeIndex; today?: string } = {},
 ): CacheProvenanceManifest {
+  const state = periodState(level, ref, options.today);
+  if (state === "future") throw new Error(`refusing to publish ${level} ${ref}: the period has not started`);
   const normalized = normalizeTemporalNarrative(level, ref, summary);
   const violation = temporalNarrativeViolation(normalized);
   if (violation) throw new Error(`refusing to publish ${level} ${ref}: ${violation}`);
   const cacheDir = options.cacheDir ?? join(SNORRIO_HOME, "cache");
   atomicWriteFile(join(cacheDir, LEVEL_DIRS[level], `${ref}.md`), normalized);
-  const manifest = buildCacheProvenanceManifest(level, ref, options);
+  const manifest = { ...buildCacheProvenanceManifest(level, ref, options), periodState: state };
   writeCacheProvenanceManifest(manifest, cacheDir);
   return manifest;
 }
@@ -147,6 +157,12 @@ export function writeCacheProvenanceManifest(
   manifest: CacheProvenanceManifest,
   cacheDir = join(SNORRIO_HOME, "cache"),
 ): void {
+  // Evidence-only rewrites (migrations, ensureCacheProvenanceManifest) don't
+  // change the prose, so they keep the state the prose was written under.
+  if (!manifest.periodState) {
+    const recorded = readCacheProvenanceManifest(manifest.level, manifest.ref, cacheDir)?.periodState;
+    if (recorded) manifest = { ...manifest, periodState: recorded };
+  }
   atomicWriteFile(cacheManifestPath(manifest.level, manifest.ref, cacheDir), JSON.stringify(manifest, null, 2) + "\n");
 }
 
@@ -171,8 +187,30 @@ export function readCacheProvenanceManifest(
   } catch { return null; }
 }
 
+function evidenceOnly(manifest: CacheProvenanceManifest): CacheProvenanceManifest {
+  const { periodState: _state, ...evidence } = manifest;
+  return evidence;
+}
+
 function sameManifest(a: CacheProvenanceManifest, b: CacheProvenanceManifest): boolean {
-  return JSON.stringify(a) === JSON.stringify(b);
+  return JSON.stringify(evidenceOnly(a)) === JSON.stringify(evidenceOnly(b));
+}
+
+/**
+ * A closed period whose summary was written while it was still open (or before
+ * period state was recorded) needs one rebuild so it reads as finished. Days
+ * are exempt: a day written during the day is already an account of that day,
+ * and a nightly closing rebuild would re-run the whole cascade every midnight.
+ */
+export function cacheNeedsClosingRebuild(
+  level: CacheLevel,
+  ref: string,
+  options: { cacheDir?: string; today?: string } = {},
+): boolean {
+  if (level === "day") return false;
+  if (periodState(level, ref, options.today) !== "closed") return false;
+  const cacheDir = options.cacheDir ?? join(SNORRIO_HOME, "cache");
+  return readCacheProvenanceManifest(level, ref, cacheDir)?.periodState !== "closed";
 }
 
 export function ensureCacheProvenanceManifest(

@@ -25,6 +25,7 @@ import { resolveSession, sessionIdFromEntries, type SessionInfo } from "./sessio
 import { resolveShaAt, readFileAtSha } from "./versioned-read.ts";
 import { getSessionLineageIndex, resolveLineageSession } from "./session-lineage.ts";
 import { temporalRefs } from "./local-date.ts";
+import { periodFraming } from "./period-state.ts";
 import { createZoneResolver, tzJournalPath } from "./tz-journal.ts";
 import { monthDates, monthWeeks, quarterMonths, weekDates, yearQuarters } from "./date-ranges.ts";
 import { ensureCacheProvenanceManifest, writeCacheWithProvenance, type CacheLevel, type CacheProvenanceManifest } from "./cache-provenance.ts";
@@ -390,6 +391,13 @@ function childManifest(level: CacheLevel, ref: string, atSha?: string | null): C
   return ensureCacheProvenanceManifest(level, ref);
 }
 
+// Every level's synthesis is told, from the calendar, whether its period is
+// over. Without this the model cannot tell "July" from "July so far". Skipped
+// for --at views: "today" there is the commit's moment, not now.
+function withPeriod(systemPrompt: string, level: CacheLevel, ref: string, atSha?: string | null): string {
+  return atSha ? systemPrompt : `${systemPrompt}\n\n${periodFraming(level, ref)}`;
+}
+
 function recallDay(dateStr: string, question: string, modelSpec: string | null, onChunk?: OnChunk) {
   const episodes = loadEpisodes(dateStr);
   if (episodes.length === 0) return `[recall: no episodes found for ${dateStr}]`;
@@ -403,7 +411,7 @@ ${PROVENANCE_SYNTHESIS_INSTRUCTIONS}
 Be precise about the work, decisions, reasoning, and commitments. If the context lacks a fact, state the factual gap without discussing source mechanics.`;
 
   const messages = [userMessage(`Question: ${question}\n\n---\n\nContext (episode summaries for ${dateStr}):\n\n${context}`)];
-  return apiCallStream(messages, systemPrompt, modelSpec, onChunk);
+  return apiCallStream(messages, withPeriod(systemPrompt, "day", dateStr, null), modelSpec, onChunk);
 }
 
 // ============================================================================
@@ -461,7 +469,7 @@ ${PROVENANCE_SYNTHESIS_INSTRUCTIONS}
 You operate at week resolution. Preserve the developing threads and trajectory without exposing the memory hierarchy or its source mechanics.`;
 
   const messages = [userMessage(`Question: ${question}\n\n---\n\nContext (day summaries for ${weekStr}):\n\n${context}`)];
-  return apiCallStream(messages, systemPrompt, modelSpec, onChunk);
+  return apiCallStream(messages, withPeriod(systemPrompt, "week", weekStr, atSha), modelSpec, onChunk);
 }
 
 // ============================================================================
@@ -516,7 +524,7 @@ ${PROVENANCE_SYNTHESIS_INSTRUCTIONS}
 You operate at month resolution. Preserve shifts, themes, and direction without exposing the memory hierarchy or its source mechanics.`;
 
   const messages = [userMessage(`Question: ${question}\n\n---\n\nContext (week summaries for ${monthStr}):\n\n${context}`)];
-  return apiCallStream(messages, systemPrompt, modelSpec, onChunk);
+  return apiCallStream(messages, withPeriod(systemPrompt, "month", monthStr, atSha), modelSpec, onChunk);
 }
 
 // ============================================================================
@@ -572,7 +580,7 @@ ${PROVENANCE_SYNTHESIS_INSTRUCTIONS}
 You operate at quarter resolution. Surface patterns, trajectories, and emergent themes without exposing the memory hierarchy or its source mechanics.`;
 
   const messages = [userMessage(`Question: ${question}\n\n---\n\nContext (month summaries for ${quarterStr}):\n\n${context}`)];
-  const result = await apiCallStream(messages, systemPrompt, modelSpec, onChunk);
+  const result = await apiCallStream(messages, withPeriod(systemPrompt, "quarter", quarterStr, atSha), modelSpec, onChunk);
 
   // Never persist an answer derived from a historical (--at) view.
   if (atSha) return result;
@@ -635,7 +643,7 @@ ${PROVENANCE_SYNTHESIS_INSTRUCTIONS}
 You operate at year resolution. Carry every real thread forward, preserve unresolved outcomes, and surface arcs and transformations without exposing the memory hierarchy or its source mechanics.`;
 
   const messages = [userMessage(`Question: ${question}\n\n---\n\nContext (quarter summaries for ${yearStr}):\n\n${context}`)];
-  const result = await apiCallStream(messages, systemPrompt, modelSpec, onChunk);
+  const result = await apiCallStream(messages, withPeriod(systemPrompt, "year", yearStr, atSha), modelSpec, onChunk);
 
   // Never persist an answer derived from a historical (--at) view.
   if (atSha) return result;
