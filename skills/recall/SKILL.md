@@ -239,6 +239,8 @@ If you need episodes from the current or recent sessions processed before recall
 snorrio flush
 ```
 
+It blocks until every touched cache is rebuilt — often several minutes, so omit the timeout — and exits 1 naming what failed and how to fix it (`--allow-failures` keeps exit 0).
+
 ## Data location
 
 - Episodes: `~/snorrio/episodes/`

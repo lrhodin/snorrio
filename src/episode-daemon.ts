@@ -61,6 +61,7 @@ import { periodState } from "./period-state.ts";
 import { migrateProvenanceMetadata, planProvenanceRecascade, writeProvenanceRecascadeMarker } from "./provenance-migration.ts";
 import { externalLineageSessionCandidates, lineageSessionCandidates } from "./session-candidates.ts";
 import { TEMPORAL_NARRATIVE_INSTRUCTIONS, temporalNarrativeViolation } from "./temporal-narrative.ts";
+import { FLUSH_TRIGGERED, formatFlushComplete, formatFlushFailure, type FlushFailure } from "./flush-report.ts";
 
 // Side-channel flag used to suppress the cascading temporal-cache rebuild during
 // batch operations (--reprocess, midnight sweeps). Read in five places below;
@@ -279,9 +280,11 @@ function noteReopenedDay(dateStr: string, epPath: string, id: string) {
   log(`  Reopened day ${dateStr}: episode ${id.slice(0, 8)} landed after its day summary was written — cascade will rebuild it. Expected after travelling west; otherwise check \`snorrio tz\`.`);
 }
 
-async function generateEpisode(filePath: string) {
+// Returns null on failure; `onError` receives why, for callers (flush) that
+// report it rather than just count it.
+async function generateEpisode(filePath: string, onError?: (error: string, id: string | null, dateStr?: string) => void) {
   const id = sessionIdFromEntries(filePath);
-  if (!id) { log(`  No session ID: ${basename(filePath)}`); return null; }
+  if (!id) { log(`  No session ID: ${basename(filePath)}`); onError?.("no session id", null); return null; }
 
   const { start, end } = metaTimestamps(filePath);
   const dateStr = toDateStr(end || start || new Date().toISOString());
@@ -309,9 +312,10 @@ async function generateEpisode(filePath: string) {
     }
   } catch (err: any) {
     log(`  Context failed ${id.slice(0, 8)}: ${err.message?.slice(0, 200)}`);
+    onError?.(`context failed: ${err.message?.slice(0, 200)}`, id, dateStr);
     return null;
   }
-  if (!ctx.messages.length) { log(`  Empty context: ${id.slice(0, 8)}`); return null; }
+  if (!ctx.messages.length) { log(`  Empty context: ${id.slice(0, 8)}`); onError?.("empty context", id, dateStr); return null; }
 
   const messages = [
     ...sessionMessagesToLlm(ctx.messages),
@@ -321,11 +325,12 @@ async function generateEpisode(filePath: string) {
   const result = await complete(messages, EPISODE_SYSTEM, null, "dmn");
   if (result.stopReason === "error") {
     log(`  API error ${id.slice(0, 8)}: ${(result.errorMessage || "").slice(0, 200)}`);
+    onError?.(`API error: ${(result.errorMessage || "").slice(0, 200)}`, id, dateStr);
     return null;
   }
 
   const text = getText(result);
-  if (!text?.trim()) { log(`  Empty output: ${id.slice(0, 8)}`); return null; }
+  if (!text?.trim()) { log(`  Empty output: ${id.slice(0, 8)}`); onError?.("empty output", id, dateStr); return null; }
 
   const timestamp = end || start || new Date().toISOString();
   const fm = buildFrontmatter("pi", filePath, timestamp, id);
@@ -388,6 +393,7 @@ async function rebuildCache(
   refs: string[],
   prefix: string = "",
   strict: boolean = false,
+  onFailure?: (level: CacheLevel, ref: string, problem: string) => void,
 ): Promise<string[]> {
   const prompts: Record<string, string> = {
     day: CACHE_Q_DAY, week: CACHE_Q_WEEK, month: CACHE_Q_MONTH,
@@ -415,7 +421,9 @@ async function rebuildCache(
       writeCacheWithProvenance(level, ref, summary as string, { lineageIndex: activeLineageIndex ?? undefined });
       return null;
     }
-    return `cache rebuild returned no usable summary for ${level} ${ref}`;
+    // Keep recall's own "[recall: API error — ...]" so the cause (overload,
+    // refusal) survives into the failure report.
+    return `cache rebuild returned no usable summary for ${level} ${ref}${summary ? `: ${String(summary).slice(0, 200)}` : ""}`;
   };
 
   const rebuild = async (ref: string) => {
@@ -437,7 +445,7 @@ async function rebuildCache(
         log(`${prefix}    ${ref} ✗ ${problem}${final ? "" : ` — retrying (${n}/${attempts - 1})`}`);
       },
     });
-    if (problem !== null) failed.push(ref);
+    if (problem !== null) { failed.push(ref); onFailure?.(level, ref, problem); }
   };
 
   if (["day", "week", "month"].includes(level)) await Promise.all(refs.map(rebuild));
@@ -570,13 +578,14 @@ async function batchCascade(
   from: string = "day",
   prefix: string = "",
   strict: boolean = false,
+  onFailure?: (level: CacheLevel, ref: string, problem: string) => void,
 ): Promise<Partial<Record<CascadeLevel, string[]>>> {
   const decision = decideCascade(dates, from as CascadeLevel);
   const failures: Partial<Record<CascadeLevel, string[]>> = {};
   for (const level of ["day", "week", "month", "quarter", "year"] as CascadeLevel[]) {
     const refs = decision[level];
     if (!refs.length) continue;
-    const failed = await rebuildCache(level, refs, prefix, strict);
+    const failed = await rebuildCache(level, refs, prefix, strict, onFailure);
     if (failed.length) failures[level] = failed;
   }
   return failures;
@@ -859,81 +868,92 @@ async function reprocess(rangeStr: string, depthStr?: string) {
 
 const FLUSH_TRIGGER = join(SNORRIO_HOME, "flush");
 
+// One flush at a time. A trigger that lands while one runs stays on disk and
+// starts the next run, so a waiting `snorrio flush` never reads another run's
+// completion as its own (it ignores lines before its "Flush triggered").
+let flushRunning = false;
+
 function startFlushWatcher() {
   setInterval(async () => {
-    if (!existsSync(FLUSH_TRIGGER)) return;
+    if (flushRunning || !existsSync(FLUSH_TRIGGER)) return;
     try { unlinkSync(FLUSH_TRIGGER); } catch { return; }
-    log("Flush triggered");
-    activeLineageIndex = getSessionLineageIndex(metaAllSessions());
-    const pendingPaths = new Set<string>();
-    for (const [filePath, timer] of timers.entries()) {
-      clearTimeout(timer);
-      timers.delete(filePath);
-      pendingPaths.add(filePath);
-    }
-    // Reconcile against disk, not just in-memory timers: if the watcher missed
-    // sessions (never installed, daemon restarted, events dropped), the timers
-    // map lies. The filesystem is the source of truth — "all sessions up to
-    // date" must be true by construction. (2026-06-09 VM onboarding finding #2)
+    flushRunning = true;
+    log(FLUSH_TRIGGERED);
+    let processed = 0;
+    const failures: FlushFailure[] = [];
+    const fail = (f: FlushFailure) => { failures.push(f); log(formatFlushFailure(f)); };
     try {
-      const { stale } = findStaleSessions(lineageSessionCandidates(activeLineageIndex), EPISODES_DIR);
-      for (const s of stale) pendingPaths.add(s.path);
+      processed = await runFlush(fail);
     } catch (err: any) {
-      log(`Flush: disk reconciliation failed (${err.message?.slice(0, 100)}); proceeding with watcher-pending only`);
-    }
-    if (pendingPaths.size === 0) { activeLineageIndex = null; log("Flush: 0 sessions to process"); return; }
-    log(`Flush: ${pendingPaths.size} pending`);
-
-    // Phase 1: Generate episodes (skip cascade — we'll do it ourselves)
-    globalThis._skipCascade = true;
-    let processed = 0, failed = 0;
-    let latestTs: string | null = null; // world-time of the latest triggering session
-    const dates = new Set<string>();
-    for (const filePath of pendingPaths) {
-      if (inflight.has(filePath)) continue;
-      inflight.add(filePath);
-      try {
-        const r = await generateEpisode(filePath);
-        if (r) {
-          processed++; dates.add(r.dateStr);
-          if (!latestTs || r.timestamp > latestTs) latestTs = r.timestamp;
-        }
-        else { failed++; }
-      } catch (err: any) { log(`Flush error: ${err.message}`); failed++; }
-      finally { inflight.delete(filePath); }
-    }
-    globalThis._skipCascade = false;
-
-    // Phase 2: Regenerate day caches (blocking — /done waits for this)
-    for (const dateStr of dates) {
-      try {
-        log(`  Regenerating day cache: ${dateStr}`);
-        const daySummary = await recall(dateStr, CACHE_Q_DAY, null);
-        if (daySummary && !daySummary.startsWith("[recall:")) {
-          const violation = temporalNarrativeViolation(daySummary as string);
-          if (violation) throw new Error(`day cache rebuild rejected: ${violation}`);
-          writeCacheWithProvenance("day", dateStr, daySummary as string, { lineageIndex: activeLineageIndex ?? undefined });
-        }
-      } catch (err: any) { log(`  Day cache error: ${err.message?.slice(0, 100)}`); }
-    }
-
-    // Emit summary — /done stops waiting here
-    log(`Flush: ${processed} processed, ${failed} failed`);
-
-    // Phase 3: Background cascade — deduplicated
-    (async () => {
-      await batchCascade(dates as Set<string>, "week", "[bg]");
-      // One commit for the whole flush batch: episodes (phase 1) + day caches
-      // (phase 2) + cascaded caches (phase 3). Author date = world-time of the
-      // latest triggering session in the batch.
-      commitDataRepo({
-        message: `cascade flush ${[...dates].sort().join(",")}: ${processed} episode${processed === 1 ? "" : "s"} → day/week/month/quarter/year`,
-        authorDate: latestTs ?? undefined,
-      });
+      fail({ kind: "flush", ref: "flush", error: err.message?.slice(0, 300) || String(err) });
+    } finally {
       activeLineageIndex = null;
-      log("  [bg] Background cascade complete");
-    })().catch(err => log(`Background cascade error: ${err.message}`));
+      globalThis._skipCascade = false;
+      flushRunning = false;
+      // `snorrio flush` returns here, and only here.
+      log(formatFlushComplete(processed, failures.length));
+    }
   }, 1000);
+}
+
+// Synchronous end to end: episodes, then the whole day→year cascade, then one
+// commit. Every failure goes to `fail`; returns the count of episodes written.
+async function runFlush(fail: (f: FlushFailure) => void): Promise<number> {
+  activeLineageIndex = getSessionLineageIndex(metaAllSessions());
+  const pendingPaths = new Set<string>();
+  for (const [filePath, timer] of timers.entries()) {
+    clearTimeout(timer);
+    timers.delete(filePath);
+    pendingPaths.add(filePath);
+  }
+  // Reconcile against disk, not just in-memory timers: if the watcher missed
+  // sessions (never installed, daemon restarted, events dropped), the timers
+  // map lies. The filesystem is the source of truth — "all sessions up to
+  // date" must be true by construction. (2026-06-09 VM onboarding finding #2)
+  try {
+    const { stale } = findStaleSessions(lineageSessionCandidates(activeLineageIndex), EPISODES_DIR);
+    for (const s of stale) pendingPaths.add(s.path);
+  } catch (err: any) {
+    log(`Flush: disk reconciliation failed (${err.message?.slice(0, 100)}); proceeding with watcher-pending only`);
+  }
+  if (pendingPaths.size === 0) { log("Flush: 0 sessions to process"); return 0; }
+  log(`Flush: ${pendingPaths.size} pending`);
+
+  // Phase 1: Generate episodes (skip cascade — we'll do it ourselves)
+  globalThis._skipCascade = true;
+  let processed = 0, failed = 0;
+  let latestTs: string | null = null; // world-time of the latest triggering session
+  const dates = new Set<string>();
+  for (const filePath of pendingPaths) {
+    if (inflight.has(filePath)) continue;
+    inflight.add(filePath);
+    const onError = (error: string, id: string | null, date?: string) =>
+      fail({ kind: "episode", ref: id?.slice(0, 8) ?? basename(filePath), date, session: filePath, error });
+    try {
+      const r = await generateEpisode(filePath, onError);
+      if (r) {
+        processed++; dates.add(r.dateStr);
+        if (!latestTs || r.timestamp > latestTs) latestTs = r.timestamp;
+      }
+      else { failed++; }
+    } catch (err: any) { log(`Flush error: ${err.message}`); onError(err.message?.slice(0, 200) || String(err), null); failed++; }
+    finally { inflight.delete(filePath); }
+  }
+  globalThis._skipCascade = false;
+  log(`Flush: ${processed} processed, ${failed} failed`);
+
+  // Phase 2: the whole cascade, deduplicated, before returning.
+  await batchCascade(dates, "day", "", false, (level, ref, problem) => fail({ kind: level, ref, error: problem }));
+
+  // One commit for the whole flush batch: episodes + every cascaded cache.
+  // Author date = world-time of the latest triggering session in the batch.
+  if (dates.size > 0) {
+    commitDataRepo({
+      message: `cascade flush ${[...dates].sort().join(",")}: ${processed} episode${processed === 1 ? "" : "s"} → day/week/month/quarter/year`,
+      authorDate: latestTs ?? undefined,
+    });
+  }
+  return processed;
 }
 
 function scheduleSweep() {

@@ -2,7 +2,7 @@
 // snorrio CLI — administrative commands for snorrio.
 //
 // Usage:
-//   snorrio flush                    Flush pending sessions through the daemon
+//   snorrio flush [--allow-failures] Flush pending sessions and wait for every cache
 //   snorrio sweep                    Find & generate missing episodes, cascade caches
 //   snorrio reprocess <range> [depth] Regenerate from scratch in range
 //   snorrio status                   Show daemon and system status
@@ -20,6 +20,7 @@ import { checkSubcommandArgs } from "../src/cli-args.ts";
 import { dailyLogPath } from "../src/log-file.ts";
 import { resolveLocalDate } from "../src/local-date.ts";
 import { createZoneResolver, tzJournalPath } from "../src/tz-journal.ts";
+import { FLUSH_TRIGGERED, FLUSH_COMPLETE, parseFlushFailure, describeFailure } from "../src/flush-report.ts";
 
 const HOME = process.env.HOME;
 const PKG_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -66,7 +67,14 @@ const cmdArgs = process.argv.slice(3);
 // so an operator who guesses a flag wrong is told what exists instead of having
 // the flag ignored.
 const USAGE = {
-  flush: "Usage: snorrio flush\n  Flush pending sessions through the daemon.",
+  flush: [
+    "Usage: snorrio flush [--allow-failures]",
+    "  Flush pending sessions through the daemon and wait until the whole",
+    "  cascade (episodes, day, week, month, quarter, year) has finished.",
+    "  Exits 1 if anything failed, naming each failure and what to do about it.",
+    "",
+    "  --allow-failures   Still report failures, but exit 0.",
+  ].join("\n"),
   sweep: "Usage: snorrio sweep\n  Find & generate missing episodes, then cascade caches.",
   reprocess: [
     "Usage: snorrio reprocess <range> [depth]",
@@ -123,7 +131,7 @@ const USAGE = {
 
 // Flags each subcommand accepts. Anything else is an error, never a default.
 const FLAG_SPECS = {
-  flush: { allowed: [] },
+  flush: { allowed: ["--allow-failures"] },
   sweep: { allowed: [] },
   reprocess: { allowed: [], positionals: 2 },
   status: { allowed: [] },
@@ -264,7 +272,7 @@ if (!cmd || cmd === "help" || cmd === "--help") {
   console.log(`snorrio — memory system for AI agents
 
 Commands:
-  flush                         Flush pending sessions through the daemon
+  flush [--allow-failures]      Flush pending sessions; wait for all caches; exit 1 on any failure
   sweep                         Find & generate missing episodes, cascade caches
   reprocess <range> [depth]     Regenerate from scratch in range
   status                        Show daemon and system status
@@ -279,86 +287,113 @@ Reprocess depths: episode (default) | day | week | month | quarter`);
 }
 
 if (cmd === "flush") {
-  writeFileSync(FLUSH_TRIGGER, new Date().toISOString());
+  const allowFailures = cmdArgs.includes("--allow-failures");
 
   // Same file the daemon is appending to, named by the same function over the
   // same journal. These two are coupled by construction: this loop tails that
   // file, so a name computed a second way does not produce a wrong filename, it
   // produces a hang — the spinner watches a file nobody writes until the
-  // 5-minute timeout. Which is what a UTC-named log did here after 17:00 PDT.
-  const logFile = dailyLogPath(SNORRIO_HOME, new Date(), resolveZoneFor);
+  // timeout. Which is what a UTC-named log did here after 17:00 PDT.
+  // Re-derived every poll: a flush now waits for the whole cascade, long
+  // enough to cross local midnight, where the daemon moves to a new file.
+  const currentLog = () => dailyLogPath(SNORRIO_HOME, new Date(), resolveZoneFor);
+  let logFile = currentLog();
 
   let logOffset = 0;
   try { logOffset = statSync(logFile).size; } catch {}
+  // Trigger only after taking the offset, or a fast daemon's "Flush triggered"
+  // lands before it and this run never recognizes its own flush.
+  writeFileSync(FLUSH_TRIGGER, new Date().toISOString());
+  let partial = ""; // a line the daemon had not finished writing at the last read
 
   const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
   const CLR = "\x1b[K"; // erase from cursor to end of line, so a shorter frame can't leave tail chars
   let spinIdx = 0;
-  const started = Date.now();
+  // A flush is as long as its LLM calls, so time out on silence, not duration:
+  // the daemon logs every episode and cache it finishes.
+  const IDLE_TIMEOUT_MS = 10 * 60_000;
+  let lastActivity = Date.now();
 
   let total = 0;
   let episodesDone = 0;
-  let phase = "waiting";
+  let processed = 0;
+  let episodesFailed = 0;
+  let phase = "waiting"; // waiting → episodes → caches
+  let cacheLevel = "";
+  let ours = false; // seen our "Flush triggered"; earlier lines belong to another run
+  const failures = [];
+
+  const status = () => phase === "waiting" ? "Waiting for daemon..."
+    : phase === "episodes" ? `Episodes: ${total ? Math.min(episodesDone, total) : episodesDone}/${total}`
+    : `Caches: ${cacheLevel || "rebuilding"}`;
+
+  const finish = (headline) => {
+    clearInterval(poll);
+    console.log(`\r${failures.length ? "✗" : "✓"} ${headline}${CLR}`);
+    if (failures.length) {
+      for (const f of failures) console.error(describeFailure(f, logFile));
+      if (allowFailures) console.error("  (--allow-failures: exiting 0)");
+    }
+    process.exit(failures.length && !allowFailures ? 1 : 0);
+  };
+
+  const handle = (line) => {
+    if (!ours) {
+      if (line.includes(FLUSH_TRIGGERED)) ours = true;
+      return;
+    }
+    if (line.includes("Flush: 0 sessions to process")) return finish("All sessions up to date");
+    const pending = line.match(/Flush: (\d+) pending/);
+    if (pending) { total = Number(pending[1]); phase = "episodes"; return; }
+    // `Done:` is logged by every episode path, so a concurrent live-mode
+    // generation can inflate this; clamped to `total` at display time.
+    if (line.includes("  Done: ")) { episodesDone++; return; }
+    const summary = line.match(/Flush: (\d+) processed, (\d+) failed/);
+    if (summary) { processed = Number(summary[1]); episodesFailed = Number(summary[2]); phase = "caches"; return; }
+    const rebuilding = line.match(/Rebuilding \d+ (\w+) cache/);
+    if (rebuilding && phase === "caches") { cacheLevel = rebuilding[1]; return; }
+    const failure = parseFlushFailure(line);
+    if (failure) { failures.push(failure); return; }
+    if (line.includes(FLUSH_COMPLETE)) {
+      const n = failures.length;
+      const eps = `${processed} episode${processed !== 1 ? "s" : ""}`;
+      return finish(n ? `${eps} — ${n} failure${n !== 1 ? "s" : ""}:` : `${eps}, caches up to date`);
+    }
+    // A daemon still running the pre-synchronous code never logs FLUSH_COMPLETE
+    // or failure lines; end on its old marker rather than hang to the timeout.
+    if (line.includes("[bg] Background cascade complete") || line.includes("Background cascade error")) {
+      console.error("\n  The daemon is running older code; restart it for per-failure reports.");
+      if (episodesFailed) failures.push({ kind: "flush", ref: "flush", error: `${episodesFailed} episode(s) failed` });
+      return finish(`${processed} episode${processed !== 1 ? "s" : ""}`);
+    }
+  };
 
   const poll = setInterval(() => {
     spinIdx = (spinIdx + 1) % SPINNER.length;
-    const s = SPINNER[spinIdx];
 
-    if (Date.now() - started > 300_000) {
-      console.log("\nFlush timed out (5m)");
+    if (Date.now() - lastActivity > IDLE_TIMEOUT_MS) {
+      console.log(`\nFlush timed out: no daemon output for ${IDLE_TIMEOUT_MS / 60_000}m (see ${logFile})`);
       process.exit(1);
     }
 
+    const nextLog = currentLog();
+    if (nextLog !== logFile) { logFile = nextLog; logOffset = 0; partial = ""; }
+
     let stat;
     try { stat = statSync(logFile); } catch { return; }
-    if (stat.size <= logOffset) {
-      const shown = total ? Math.min(episodesDone, total) : episodesDone;
-      process.stdout.write(`\r${s} ${phase === "waiting" ? "Waiting for daemon..." : `Episodes: ${shown}/${total}`}${CLR}`);
-      return;
+    if (stat.size > logOffset) {
+      const fd = openSync(logFile, "r");
+      const buf = Buffer.alloc(stat.size - logOffset);
+      readSync(fd, buf, 0, buf.length, logOffset);
+      closeSync(fd);
+      logOffset = stat.size;
+      lastActivity = Date.now();
+
+      const lines = (partial + buf.toString("utf8")).split("\n");
+      partial = lines.pop() ?? "";
+      for (const line of lines) handle(line);
     }
-
-    const fd = openSync(logFile, "r");
-    const buf = Buffer.alloc(stat.size - logOffset);
-    readSync(fd, buf, 0, buf.length, logOffset);
-    closeSync(fd);
-    logOffset = stat.size;
-
-    const text = buf.toString("utf8");
-
-    if (text.includes("Flush: 0 sessions to process")) {
-      console.log(`\r✓ All sessions up to date${CLR}`);
-      clearInterval(poll);
-      process.exit(0);
-    }
-
-    const pendingMatch = text.match(/Flush: (\d+) pending/);
-    if (pendingMatch) {
-      total = Number(pendingMatch[1]);
-      phase = "episodes";
-    }
-
-    // NOTE: `Done:` is logged by every episode-generation path (live debounce
-    // watcher, flush, sweep). A concurrent live-mode generation during the
-    // flush window can emit extra `Done:` lines that aren't part of this batch,
-    // so this is an upper bound — clamped to `total` at display time. The
-    // authoritative count is the `Flush: N processed` summary line below.
-    const doneMatches = text.match(/  Done: /g);
-    if (doneMatches) episodesDone += doneMatches.length;
-
-    const summary = text.match(/Flush: (\d+) processed, (\d+) failed/);
-    if (summary) {
-      const processed = Number(summary[1]);
-      const failed = Number(summary[2]);
-      let msg = `\r✓ ${processed} episode${processed !== 1 ? "s" : ""}`;
-      if (failed > 0) msg += ` (${failed} failed)`;
-      msg += " — caches updating in background";
-      console.log(msg + CLR);
-      clearInterval(poll);
-      process.exit(failed > 0 ? 1 : 0);
-    }
-
-    const shown = total ? Math.min(episodesDone, total) : episodesDone;
-    process.stdout.write(`\r${s} Episodes: ${shown}/${total}${CLR}`);
+    process.stdout.write(`\r${SPINNER[spinIdx]} ${status()}${CLR}`);
   }, 200);
 
 } else if (cmd === "sweep") {
