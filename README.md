@@ -78,3 +78,6 @@ change recall defaults. Pi discovers it under `skills/jev`.
 
 [OpenAI fast](docs/openai-fast.md) requests priority service for explicitly opted-in
 OpenAI models. It works without the memory stack and is disabled by default.
+
+[Bash background](docs/bash-background.md) moves a running bash call to the
+background on `cmd+ctrl+b`; its result returns to the model when it ends.

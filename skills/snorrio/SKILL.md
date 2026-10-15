@@ -131,6 +131,7 @@ it is the code pi loads. A separate source checkout drifts behind it.
   extensions/                      # auto-discovered by pi
     dmn-context.ts                 # date refresh, timestamps, setup detection
     cross-model-thinking.ts
+    bash-background.ts             # cmd+ctrl+b backgrounds a running bash call
   bin/
     snorrio                        # CLI: flush, status, update
   SETUP.md                         # setup requirements, addressed to the agent
