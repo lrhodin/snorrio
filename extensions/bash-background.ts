@@ -243,11 +243,19 @@ export default function (pi: ExtensionAPI) {
     },
   });
   pi.registerCommand("kill", {
-    description: "Stop a background bash job: /kill <id>",
+    description: "Stop a background bash job (pick from a list, or /kill <id>)",
     handler: async (args, c) => {
-      const id = Number(args.trim().replace(/^#/, ""));
+      let id = Number(args.trim().replace(/^#/, ""));
+      if (!args.trim()) {
+        const running = mgr.running().filter(j => !j.attached);
+        if (!running.length) { c.ui.notify("No running background jobs", "info"); return; }
+        const labels = running.map(j => describe(j).split("\n")[0]);
+        const pick = await c.ui.select("Kill background job", labels);
+        if (!pick) return;
+        id = running[labels.indexOf(pick)].id;
+      }
       const job = mgr.jobs.get(id);
-      if (!job || (job.attached && job.status === "running")) { c.ui.notify("Usage: /kill <job id> (see /jobs)", "warning"); return; }
+      if (!job || (job.attached && job.status === "running")) { c.ui.notify(`No background job #${args.trim()} (see /jobs)`, "warning"); return; }
       if (job.status !== "running") { c.ui.notify(`Job #${id} already ${job.status}`, "info"); return; }
       mgr.kill(id);
       c.ui.notify(`Killing job #${id}`, "info");

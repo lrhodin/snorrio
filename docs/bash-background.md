@@ -14,7 +14,8 @@ Without Snorrio, copy **only** `extensions/bash-background.ts` to
   longer stops it, and the call's `timeout` no longer applies.
 - When the job ends, its exit code, duration, and last 50 lines reach the model
   as one message. Idle: it starts a turn. Busy: it steers the current turn.
-- `/jobs` lists jobs; `/kill <id>` stops one and its child processes.
+- `/jobs` lists jobs. `/kill` picks a running job from a list and stops it and its
+  child processes; `/kill <id>` skips the list.
 - The model gets `bg_status` and `bg_kill` for the same. It cannot start a
   background job itself; only the key detaches.
 - Full output of every job: `~/.pi/agent/bg/`. Quitting or reloading pi kills
