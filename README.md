@@ -30,7 +30,7 @@ authoritative onboarding procedure.
 
 Snorrio currently depends on
 [`lrhodin/pi-herdr-subagents`](https://github.com/lrhodin/pi-herdr-subagents) at
-commit `2395547f4bc50a1f6202c7598261d1409339aa79`, rather than the upstream npm
+commit `2e0bab848b78073e2f3bd208cb89f378e5dcc416`, rather than the upstream npm
 package. The fork adds recursive lineage, default recursive tool access through
 restricted native-tool allowlists, truthful disabled-spawning policy, safe
 resume behavior, descendant-aware auto-exit, reload-safe watchers, idempotent

@@ -26,7 +26,7 @@ export interface SetupCheckResult {
 }
 
 export const REQUIRED_SUBAGENT_FORK_COMMIT =
-  "2395547f4bc50a1f6202c7598261d1409339aa79";
+  "2e0bab848b78073e2f3bd208cb89f378e5dcc416";
 export const REQUIRED_SUBAGENT_PACKAGE_SOURCE =
   `git:github.com/lrhodin/pi-herdr-subagents@${REQUIRED_SUBAGENT_FORK_COMMIT}`;
 
