@@ -1,7 +1,6 @@
 ---
 name: recall-digger
 description: Answers questions about past sessions by drilling the snorrio recall hierarchy (year → quarter → month → week → day → session) and returning ONLY the answer. Use whenever you need a fact, decision, command, credential location, or verbatim content from past work that isn't in a file. Keeps all navigation noise out of the caller's context.
-tools: read, bash
 spawning: true
 session-mode: lineage-only
 auto-exit: true
