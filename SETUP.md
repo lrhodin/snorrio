@@ -262,10 +262,10 @@ through supported Herdr commands.
 ### R5.4 — install Snorrio’s required `pi-herdr-subagents` fork
 
 Snorrio currently requires [lrhodin/pi-herdr-subagents](https://github.com/lrhodin/pi-herdr-subagents)
-pinned to commit `2e0bab848b78073e2f3bd208cb89f378e5dcc416`:
+pinned to commit `3f6c6ebd3d1c0fea913610db062aa85fca545945`:
 
 ```sh
-pi install git:github.com/lrhodin/pi-herdr-subagents@2e0bab848b78073e2f3bd208cb89f378e5dcc416
+pi install git:github.com/lrhodin/pi-herdr-subagents@3f6c6ebd3d1c0fea913610db062aa85fca545945
 ```
 
 Do **not** substitute `npm:pi-herdr-subagents` or the unpatched upstream Git
@@ -293,7 +293,7 @@ then install the pinned fork without disturbing unrelated packages. For example:
 
 ```sh
 pi remove npm:pi-herdr-subagents
-pi install git:github.com/lrhodin/pi-herdr-subagents@2e0bab848b78073e2f3bd208cb89f378e5dcc416
+pi install git:github.com/lrhodin/pi-herdr-subagents@3f6c6ebd3d1c0fea913610db062aa85fca545945
 ```
 
 **Why a pin and not a moving ref.** Pinned refs are not advanced by
