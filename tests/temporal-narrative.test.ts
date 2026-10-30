@@ -34,7 +34,7 @@ test("day titles are deterministic Pacific calendar dates", () => {
   );
 });
 
-test("public temporal narrative contract rejects provenance and non-Pacific artifacts", () => {
+test("public temporal narrative contract rejects non-Pacific times and session IDs", () => {
   assert.match(TEMPORAL_NARRATIVE_INSTRUCTIONS, /America\/Los_Angeles/);
   assert.match(TEMPORAL_NARRATIVE_INSTRUCTIONS, /Never mention provenance/);
 
@@ -42,9 +42,6 @@ test("public temporal narrative contract rejects provenance and non-Pacific arti
     "All times below are UTC.",
     "The run ended at 17:38Z.",
     "The run ended at 2026-08-26T17:38:00Z.",
-    "Provenance was incomplete.",
-    "The lineage could not be established.",
-    "The sidecar has a snapshot race.",
     "Session 01a0400a-92e2-7a0c-bf24-ec393932bcc8 did the work.",
   ]) assert.ok(temporalNarrativeViolation(text), text);
 
@@ -52,4 +49,9 @@ test("public temporal narrative contract rejects provenance and non-Pacific arti
     temporalNarrativeViolation("PAR-5056 closed at 10:38 AM PT after the policy decision."),
     null,
   );
+  // Topic words are not machinery; the prompt steers provenance wording.
+  for (const text of [
+    "Fixed subagent lineage tracking for orphaned panes.",
+    "Traced which fork and commit provenance the build used.",
+  ]) assert.equal(temporalNarrativeViolation(text), null, text);
 });

@@ -31,7 +31,6 @@ export function prepareTemporalNarrativeSource(text: string): string {
 
 const SESSION_ID = /\b(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|01[a-z0-9]{6,})\b/i;
 const UTC_TIME = /(?:\bUTC\b|\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?Z\b|\b\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?Z\b)/i;
-const PROVENANCE_LANGUAGE = /\b(?:provenance|lineage|evidence source|source groups?|provenance famil(?:y|ies)|provenance manifest|session IDs?|coverage incomplete|independent corroboration|internal bookkeeping|source mechanics|sidecars?|snapshot race|cascade coordinator|drill(?:ing)? (?:down|into))\b/i;
 
 export function normalizeTemporalNarrative(level: string, ref: string, text: string): string {
   if (level !== "day" || !/^\d{4}-\d{2}-\d{2}$/.test(ref)) return text;
@@ -48,10 +47,13 @@ export function normalizeTemporalNarrative(level: string, ref: string, text: str
     : `# ${title}\n\n${text}`;
 }
 
-/** Return a reason when text violates the public temporal-cache contract. */
+/**
+ * Return a reason when text violates the public temporal-cache contract.
+ * Provenance wording is steered by the prompt only: a word-list check
+ * rejected summaries that merely named a topic (lineage, provenance).
+ */
 export function temporalNarrativeViolation(text: string): string | null {
   if (UTC_TIME.test(text)) return "contains a UTC or Z-suffixed timestamp";
   if (SESSION_ID.test(text)) return "contains an internal session identifier";
-  if (PROVENANCE_LANGUAGE.test(text)) return "exposes provenance machinery";
   return null;
 }
