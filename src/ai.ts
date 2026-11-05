@@ -76,6 +76,18 @@ function isValidPiRoot(root: string): boolean {
 }
 
 function findPiRoot(): string | null {
+  const scopes = ["@earendil-works/pi-coding-agent", "@mariozechner/pi-coding-agent"];
+  // 1. Explicit override.
+  const envRoot = process.env.PI_ROOT;
+  if (envRoot && isValidPiRoot(envRoot)) return envRoot;
+  // 2. Global modules of the node running us: no PATH, no subprocess, and the
+  //    same node that will import() the package.
+  const nodeGlobal = join(dirname(process.execPath), "..", "lib", "node_modules");
+  for (const scope of scopes) {
+    const candidate = join(nodeGlobal, scope);
+    if (isValidPiRoot(candidate)) return candidate;
+  }
+  // 3. PATH-based discovery.
   if (!hasPi()) return null;
   // Primary: resolve `which pi` through symlinks and strip the /dist/ tail.
   // This works when pi is a real bin symlink into the package, but NOT when
@@ -92,7 +104,7 @@ function findPiRoot(): string | null {
   // @mariozechner, then renamed to @earendil-works. Prefer the new scope.
   try {
     const globalRoot = execSync("npm root -g", { encoding: "utf8", stdio: "pipe" }).trim();
-    for (const scope of ["@earendil-works/pi-coding-agent", "@mariozechner/pi-coding-agent"]) {
+    for (const scope of scopes) {
       const candidate = join(globalRoot, scope);
       if (isValidPiRoot(candidate)) return candidate;
     }
